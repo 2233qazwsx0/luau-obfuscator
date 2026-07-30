@@ -1,5 +1,7 @@
 # Luau Obfuscator
 
+> **Version 0.5.0** — VM runtime + v0.8 多 VM 交替执行 + 签名输出
+
 A Luau (Roblox Lua dialect) code obfuscator with AST flattening and VM bytecode compilation. This project targets the obfuscation style used by "猫猫脚本 114514", featuring control flow flattening, dead code injection, constant table encryption, an optional VM bytecode mode, and **v0.8 multi-VM alternate execution**.
 
 ## Features
