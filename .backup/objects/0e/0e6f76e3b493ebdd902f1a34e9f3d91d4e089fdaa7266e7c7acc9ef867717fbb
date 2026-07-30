@@ -1,0 +1,49 @@
+// src/transforms/numbers.ts — D2: bitxor number obfuscation.
+//
+// Every numeric literal is replaced with `_B(N, K) - K` where K
+// is a per-instance key drawn from a seeded PRNG. This mirrors the
+// reference sample's `a0(x, k)` style.
+//
+// We use a *two-step* transform `_B(N, K) - K` (== N) so the final
+// form is just `(_B(N, K) + (K * -1))` which is robust even when
+// the target runtime lacks bit32 (older luau versions).
+
+import { TokenKind, type Token } from "../parser/tokens.js";
+import { mulberry32, randInt } from "../util/prng.js";
+
+function parseNumberLit(s: string): number | null {
+  // 0x... / 0X...
+  if (/^0[xX][0-9a-fA-F]+(\.[0-9a-fA-F]+)?(p[+-]?\d+)?$/.test(s)) {
+    return Number(s);
+  }
+  // dec / 1.5e3
+  if (/^\d+(\.\d+)?([eE][+-]?\d+)?$/.test(s)) {
+    return Number(s);
+  }
+  return null;
+}
+
+function formatNumberLit(n: number): string {
+  if (Number.isInteger(n)) return n.toString();
+  return n.toString();
+}
+
+/** Replace every numeric literal with a bit32.xor expression. */
+export function obfuscateNumbers(tokens: Token[], seed: number): Token[] {
+  const rng = mulberry32(seed ^ 0x9e3779b9);
+  return tokens.map((t) => {
+    if (t.kind !== TokenKind.NUMBER) return t;
+    const n = parseNumberLit(t.value);
+    if (n === null || !Number.isFinite(n)) return t;
+    const k = (randInt(rng, 0x7fffffff) | 1) >>> 0;
+    // Compose a valid `_B + offset` expression at emit time; here
+    // we just stash the meta-channel on the token. The emitter (or pipeline)
+    // redoes the same math on the AST for end-to-end correctness.
+    return {
+      ...t,
+      value: formatNumberLit(n),
+      // meta channel:
+      __obf: { kind: "bitxor", key: k, n },
+    } as Token & { __obf: { kind: "bitxor"; key: number; n: number } };
+  });
+}
