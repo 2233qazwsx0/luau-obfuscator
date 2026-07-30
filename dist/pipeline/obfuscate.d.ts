@@ -17,6 +17,10 @@ export interface ObfuscateOptions {
     vm?: boolean;
     /** Wrap VM bytecode in Luau runtime template → executable script (v0.4). */
     runtime?: boolean;
+    /** Disable runtime memory wiping (secure_nil + GC, v0.5). */
+    noMemwipe?: boolean;
+    /** Disable anti-dump decoy blob (v0.5). */
+    noAntidump?: boolean;
 }
 export interface ObfuscateResult {
     out: string;

@@ -18,7 +18,9 @@ program
   .option("--no-flatten", "disable control-flow flattening")
   .option("--no-deadcode", "disable dead code injection")
   .option("--vm", "VM bytecode mode: AST → bytecode → LZW+XOR → hex (experimental)")
-  .option("--runtime", "wrap VM bytecode in Luau runtime template (implies --vm, v0.4)");
+  .option("--runtime", "wrap VM bytecode in Luau runtime template (implies --vm, v0.4)")
+  .option("--no-memwipe", "disable runtime memory wiping (secure_nil + GC, v0.5)")
+  .option("--no-antidump", "disable anti-dump decoy blob (v0.5)");
 
 program.action((opts) => {
   const src = readFileSync(resolve(opts.input), "utf8");
@@ -33,6 +35,8 @@ program.action((opts) => {
     noDeadcode: opts.deadcode === false,
     vm: opts.vm === true || opts.runtime === true,
     runtime: opts.runtime === true,
+    noMemwipe: opts.memwipe === false,
+    noAntidump: opts.antidump === false,
   });
   if (opts.out) {
     writeFileSync(resolve(opts.out), out, "utf8");

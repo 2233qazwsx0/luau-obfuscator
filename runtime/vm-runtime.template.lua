@@ -12,6 +12,73 @@
 -- template is self-obfuscated through the D1-D5 pipeline, the emitter prepends
 -- its own _B polyfill (src/emit/bit32_polyfill.ts) which D2/D3 rely on.
 
+--[[__MEMWIPE_BEGIN__]]
+-- ---- v0.5 内存清理辅助函数 ----
+-- 安全置空：先用全零/空值覆写，再解除引用，防止内存 dump 拿到明文残片。
+-- string 不可变，但用同长全零串覆盖局部槽后原串引用计数下降，配合 GC 回收。
+local function secure_nil(var)
+  if type(var) == "string" then
+    return string.rep("\x00", #var)
+  elseif type(var) == "table" then
+    local k = next(var)
+    while k ~= nil do
+      var[k] = nil
+      k = next(var, k)
+    end
+    return nil
+  end
+  return nil
+end
+
+-- 安全触发 GC：独立 Luau 有 collectgarbage，Roblox 没有 → pcall 降级。
+local function gc_trigger()
+  pcall(function() collectgarbage("collect") end)
+end
+--[[__MEMWIPE_END__]]
+
+--[[__ANTIDUMP_HELPERS_BEGIN__]]
+-- ---- v0.5 反 dump 环境检测 ----
+-- 返回 true 表示疑似调试/dump/exploit 环境，应使用假数据诱饵。
+-- 设计原则：误杀优先于漏杀 —— 正常 Luau/Roblox 环境绝不触发。
+-- 只检测明确的 exploit/dump 工具特征，不因 debug/getfenv 存在就触发。
+local function anti_dump_check()
+  local detected = false
+
+  -- 1) 已知 exploit/dump 环境的全局函数（Roblox exploit 注入、dump 工具等）
+  --    这些在原生 Luau/Roblox 中不存在，只有注入工具才有。
+  --    注意：loadstring/getfenv/setfenv 在原生 Luau 中存在，不能作为判据。
+  pcall(function()
+    local exploit_signs = {
+      "hookfunction", "getrawmetatable", "setrawmetatable", "syn",
+      "getgenv", "getrenv", "getreg", "getidentity",
+      "dumpstring", "bytecode",
+    }
+    local g = getfenv and getfenv(0) or _G
+    for _, name in ipairs(exploit_signs) do
+      if g[name] ~= nil then
+        detected = true
+        break
+      end
+    end
+  end)
+  if detected then return true end
+
+  -- 2) 活跃的 debug hook（调试器附加时 sethook 会设置钩子）
+  --    原生 Luau 的 debug.gethook 返回 nil（无钩子），调试器返回非 nil。
+  pcall(function()
+    if type(debug) == "table" and type(debug.gethook) == "function" then
+      local hook = debug.gethook()
+      if hook ~= nil then
+        detected = true
+      end
+    end
+  end)
+  if detected then return true end
+
+  return false
+end
+--[[__ANTIDUMP_HELPERS_END__]]
+
 -- Extract `width` bits from `value` starting at 1-indexed bit `start`.
 -- Matches encoder.ts extractBits() exactly.
 local function extract_bits(value, start, width)
@@ -476,11 +543,20 @@ end
 -- --------------------------------------------------------------------------
 -- Boot
 -- --------------------------------------------------------------------------
+-- __FAKE_BLOB__ 由 runtime-template.ts 替换为假字节码 hex 字符串（反 dump 诱饵）。
 local HEX_BLOB = "__HEX_BLOB__"
+local FAKE_BLOB = "__FAKE_BLOB__"
 local CIPHER_KEY = __CIPHER_KEY__
 
 local function vm_boot()
-  local cipher_data = hex_to_bytes(HEX_BLOB)
+  local blob = HEX_BLOB
+  --[[__ANTIDUMP_BOOT_BEGIN__]]
+  -- 反 dump：检测到调试环境时把真实 blob 替换为假数据诱饵。
+  -- dump 出来的字节码是伪随机垃圾，无法还原程序逻辑。
+  if anti_dump_check() then blob = FAKE_BLOB end
+  --[[__ANTIDUMP_BOOT_END__]]
+
+  local cipher_data = hex_to_bytes(blob)
   local decrypted = stream_decrypt(cipher_data, CIPHER_KEY)
   local serialized = lzw_decode(decrypted)
   local reader = make_reader(serialized)
@@ -490,7 +566,29 @@ local function vm_boot()
   -- _G directly. The __index proxy keeps globals like print/tostring/game
   -- visible while letting the script declare its own globals.
   local env = setmetatable({}, { __index = _G })
+
+  --[[__MEMWIPE_BEGIN__]]
+  -- 解码完成、执行前：立即清空所有中间解码数据 + 强制 GC。
+  -- 此时 proto.instructions 已独立存在于内存，原始密文/明文/序列化串不再需要。
+  -- dump 只能拿到反序列化后的指令数组，拿不到 LZW 解压后的完整二进制。
+  secure_nil(cipher_data)
+  secure_nil(decrypted)
+  secure_nil(serialized)
+  -- reader 内部持有 serialized 的引用（state.pos + data），一并清空。
+  pcall(function() reader.state = nil end)
+  secure_nil(reader)
+  gc_trigger()
+  --[[__MEMWIPE_END__]]
+
   vm_execute(proto, env, {}, {})
+
+  --[[__MEMWIPE_BEGIN__]]
+  -- 执行完毕：清空指令数组 + 常量池 + 环境，再触发 GC。
+  -- 此时程序已输出完毕，所有解码数据从内存消失。
+  secure_nil(proto)
+  secure_nil(env)
+  gc_trigger()
+  --[[__MEMWIPE_END__]]
 end
 
 vm_boot()

@@ -8,6 +8,7 @@ import { compileAST } from "./compiler.js";
 import { serializeFunction } from "./encoder.js";
 import { packBytecode } from "./packer.js";
 import { buildRuntime } from "./runtime-template.js";
+import { DEFAULT_MEMWIPE, type MemWipeOptions } from "./memory.js";
 import type { Node } from "../parser/parser.js";
 
 export interface VmResult {
@@ -44,11 +45,16 @@ export function compileVM(ast: Node, seed: number): VmResult {
  * Compile an AST to packed bytecode AND wrap it in the Luau runtime template.
  * The returned string is a complete, executable Luau script.
  *
- * @param ast - The parsed AST (Block node)
+ * @param ast  - The parsed AST (Block node)
  * @param seed - PRNG seed
+ * @param mem  - 内存清理 / 反 dump 选项（默认全开）
  * @returns Final Luau source that decodes and executes the bytecode
  */
-export function compileVMWithRuntime(ast: Node, seed: number): string {
+export function compileVMWithRuntime(
+  ast: Node,
+  seed: number,
+  mem: MemWipeOptions = DEFAULT_MEMWIPE,
+): string {
   const { hex, cipherKey } = compileVM(ast, seed);
-  return buildRuntime(hex, cipherKey);
+  return buildRuntime(hex, cipherKey, mem);
 }

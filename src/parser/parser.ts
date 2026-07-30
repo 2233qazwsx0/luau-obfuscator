@@ -199,6 +199,8 @@ function parseStmt(s: PState): Node | null {
   }
   // type / export type  (Luau type aliases)
   // `type Name = ...`  or  `export type Name = ...`
+  // But `type(x)` / `typeof(x)` as a call expression is NOT a type alias —
+  // fall through to expression-statement parsing in that case.
   if (t.kind === TokenKind.KEYWORD && (t.value === "type" || t.value === "export")) {
     let exported = false;
     if (t.value === "export") {
@@ -207,18 +209,11 @@ function parseStmt(s: PState): Node | null {
       exported = true;
     } else {
       s.i++;                    // consume `type`
-      // Distinguish `type Name = ...` from `typeof(x)` — but `typeof`
-      // is a separate keyword. So if next token is `typeof`, fall through.
-      if (matchKw(s, "typeof")) {
-        // This is `typeof(...)` — un-eat `type` and fall through to expression parsing.
+      const after = peek(s);
+      // `type(` → function call, not type alias. Un-eat and fall through.
+      // `typeof` after `type` → also a call expression. Un-eat and fall through.
+      if ((after.kind === TokenKind.OP && after.value === "(") || matchKw(s, "typeof")) {
         s.i--;                  // un-eat `type`
-        // Fall through to expression parsing below (but we can't fall through
-        // cleanly in a structured if/else, so we just don't return here.
-        // The expression parsing will re-encounter `type` as an IDENT-like token.
-        // Actually, `type` is a KEYWORD, so it won't be parsed as an IDENT.
-        // `typeof` is also a KEYWORD. We need to handle `typeof` as a primary.
-        // For now, just fall through — the expression parser will see `type` keyword
-        // and error. This edge case is extremely rare in obfuscation scenarios.
       } else {
         const name = eat(s, TokenKind.IDENT).value;
         eat(s, TokenKind.OP, "=");
@@ -597,6 +592,17 @@ function parsePrimary(s: PState): Node {
   if (t.kind === TokenKind.IDENT) {
     s.i++;
     return parsePostfix(s, { t: "Ident", name: t.value, line: t.line });
+  }
+  // Soft keywords `type` / `typeof` used as function calls in expression
+  // position (e.g. `type(x) == "string"`). Luau treats these contextually:
+  // `type Name = ...` is a type alias, but `type(x)` is the global function.
+  // We detect the call form by checking if the next token is `(`.
+  if (t.kind === TokenKind.KEYWORD && (t.value === "type" || t.value === "typeof")) {
+    const next = peek(s, 1);
+    if (next.kind === TokenKind.OP && next.value === "(") {
+      s.i++;
+      return parsePostfix(s, { t: "Ident", name: t.value, line: t.line });
+    }
   }
   s.errors.push(`[${t.line}:${t.col}] expected expression, got ${t.kind} '${t.value}'`);
   throw new Error(s.errors[s.errors.length - 1]!);
