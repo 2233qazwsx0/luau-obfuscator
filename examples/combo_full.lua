@@ -1,0 +1,126 @@
+local player = game.Players.LocalPlayer
+local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
+
+local btn = Instance.new("TextButton")
+btn.Size = UDim2.new(0, 60, 0, 60)
+btn.Position = UDim2.new(1, -80, 0, 80)
+btn.AnchorPoint = Vector2.new(1, 0)
+btn.Text = "1+2"
+btn.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+btn.TextColor3 = Color3.new(1, 1, 1)
+btn.TextSize = 18
+btn.Font = Enum.Font.GothamBold
+btn.BorderSizePixel = 0
+btn.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = btn
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 20, 0, 20)
+closeBtn.Position = UDim2.new(1, -8, 0, -8)
+closeBtn.AnchorPoint = Vector2.new(1, 0)
+closeBtn.Text = "X"
+closeBtn.TextSize = 14
+closeBtn.TextColor3 = Color3.new(1, 1, 1)
+closeBtn.BackgroundColor3 = Color3.fromRGB(220, 40, 40)
+closeBtn.BorderSizePixel = 0
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Parent = btn
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(1, 0)
+closeCorner.Parent = closeBtn
+
+local function showNotification(message, duration)
+    duration = duration or 2
+    local notif = Instance.new("Frame")
+    notif.Size = UDim2.new(0, 300, 0, 50)
+    notif.Position = UDim2.new(0.5, -150, 0.5, -25)
+    notif.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    notif.BackgroundTransparency = 0.2
+    notif.BorderSizePixel = 0
+    notif.Parent = gui
+
+    local notifCorner = Instance.new("UICorner")
+    notifCorner.CornerRadius = UDim.new(0, 8)
+    notifCorner.Parent = notif
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = message
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.TextSize = 18
+    label.Font = Enum.Font.GothamBold
+    label.TextWrapped = true
+    label.Parent = notif
+
+    notif.BackgroundTransparency = 1
+    label.TextTransparency = 1
+    local tween = game:GetService("TweenService")
+    local fadeInBg = tween:Create(notif, TweenInfo.new(0.3), {BackgroundTransparency = 0.2})
+    local fadeInText = tween:Create(label, TweenInfo.new(0.3), {TextTransparency = 0})
+    fadeInBg:Play()
+    fadeInText:Play()
+
+    task.wait(duration)
+    local fadeOutBg = tween:Create(notif, TweenInfo.new(0.3), {BackgroundTransparency = 1})
+    local fadeOutText = tween:Create(label, TweenInfo.new(0.3), {TextTransparency = 1})
+    fadeOutBg:Play()
+    fadeOutText:Play()
+    fadeOutBg.Completed:Connect(function()
+        notif:Destroy()
+    end)
+end
+
+closeBtn.MouseButton1Click:Connect(function()
+    gui:Destroy()
+end)
+
+local function executeCombo()
+    local args1 = {
+        [1] = {
+            ["Tool"] = game:GetService("Players").LocalPlayer.Backpack:FindFirstChild("Flowing Water"),
+            ["Goal"] = "Console Move"
+        }
+    }
+    game:GetService("Players").LocalPlayer.Character.Communicate:FireServer(args1)
+    task.wait(2.2)
+    local args2 = {
+        [1] = {
+            ["Tool"] = game:GetService("Players").LocalPlayer.Backpack:FindFirstChild("Lethal Whirlwind Stream"),
+            ["Goal"] = "Console Move"
+        }
+    }
+    game:GetService("Players").LocalPlayer.Character.Communicate:FireServer(args2)
+    local p = game.Players.LocalPlayer
+    local r = (p.Character or p.CharacterAdded:Wait()):WaitForChild("HumanoidRootPart")
+    local tween = game:GetService("TweenService"):Create(r, TweenInfo.new(0.1), {CFrame = r.CFrame + r.CFrame.LookVector * 17})
+    tween:Play()
+    tween.Completed:Wait()
+end
+
+local executing = false
+
+btn.MouseButton1Click:Connect(function()
+    if executing or btn.Text == "执行中" then return end
+
+    executing = true
+    btn.Text = "执行中"
+    btn.BackgroundColor3 = Color3.fromRGB(255, 170, 0)
+
+    task.spawn(function()
+        local success, err = pcall(executeCombo)
+        btn.Text = "1+2"
+        btn.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+        executing = false
+
+        if success then
+            showNotification("连招执行完毕", 1.5)
+        else
+            showNotification("出错: " .. tostring(err), 2)
+        end
+    end)
+end)
