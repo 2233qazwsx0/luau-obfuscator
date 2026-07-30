@@ -1,0 +1,259 @@
+# TODO.md — Roadmap for v0.2 — v0.5
+
+> **Audience: future me / future AI picking this up.**
+> This document is the **handover** for completing the high-strength obfuscator.
+> It is intentionally written in first-person with concrete file paths and
+> design notes so that any agent (or human) can resume work without needing to
+> re-read the existing code.
+
+## What we have (v0.1 deliverable, ✅)
+
+- Lexer (Luau 0.x subset) covering identifiers, keywords, strings (single-
+  and long-bracket), numbers (dec/hex/sci), operators, comments.
+- AST parser covering `local`, `if/elseif/else`, `while`, `repeat/until`,
+  numeric `for`, generic `for in`, `function` (named decl + method decl),
+  `return`, `do`, `break`, `continue`, expressions (arith, concat, calls,
+  method calls, indexing, tables, closures).
+- Three transforms actually wired into the pipeline:
+  - **D1**: identifier renaming (locals → a/b/c/aa/...).
+  - **D2**: numeric bitxor (`(bit32.bxor(K, N0) + (n - N0))`).
+  - **D3**: string XOR (inline IIFE per string literal).
+- Per-instance 32-bit cipher key derived from `mulberry32(seed)`.
+- `tests/*.test.ts` cover: lexer, pipeline end-to-end, cipher round-trip.
+
+## What's missing (and how to add it)
+
+The original plan called for **6 stages**: parser (B), IR (C), transforms (D),
+VM compiler (E), runtime template (F), emit/e2e (G), decrypt (H). Of those:
+
+- B: **partially done**. We have working subset of Luau 0.x. Not yet in tree:
+  `goto`, `::labels::`, `match`, generic-for with multiple iterators, full
+  type annotations, compiler conditional expressions (`<...>`), long brackets
+  inside strings (the `\` escape in `\`hello\\nworld`\`` form).
+- C: **not started**. No IR.
+- D1-D5: D1/D2/D3 wired; D4 (flatten) and D5 (deadcode) are stubs.
+- E: **not started**. No custom bytecode VM.
+- F: **not started**. No Luau-side runtime template (interpreter shell).
+- G: emitter wired but minimal — no IR-based dispatch emitter.
+- H: **stub only**.
+
+The fastest path to "matches the reference" is **E + F**; without those the
+rest of D4/D5 is essentially decorative.
+
+---
+
+## Stage plan (preserve original commit cadence if you want)
+
+### v0.2 — IR + flatten (1-2 days)
+
+Goal: lift AST → 3-address IR → AST, with block ordering shuffled by a
+sentinel dispatch variable. This makes D4 real without needing the VM yet.
+
+**New files:**
+
+- `src/ir/ir.ts` — `Function`, `Block`, `Ins`, `Operand` types.
+- `src/ir/cfg.ts` — control-flow graph builder.
+- `src/ir/analyzer.ts` — liveness / upvalue numbering (basis for register alloc later).
+- `src/ir/builder.ts` — AST → IR translator.
+
+**Modify:**
+
+- `src/transforms/flatten.ts` — replace the no-op with a real dispatcher.
+  Output form:
+  ```lua
+  local __b = 0
+  while true do
+    if __b == 0 then __b = <next-state-random>; ... end
+    if __b == 1 then __b = <next-state-random>; ... end
+    ...
+    if __b == -1 then break end
+  end
+  ```
+  Every `Block` in the IR becomes one `if` branch. State IDs are picked from
+  `mulberry32(seed ^ chunk-id)`. The IR must be reachable in the original
+  order so semantics don't change.
+- `src/pipeline/obfuscate.ts` — insert `buildIR` → `flatten` → emit-from-IR
+  step. The current `emit()` over AST can stay as a fallback when D4 is
+  disabled.
+
+**Tests:**
+
+- `tests/flatten.test.ts` — verify (a) the IR round-trips back to equivalent
+  AST, (b) running the obfuscated program still produces the same output
+  for `examples/hello.lua`.
+
+### v0.3 — VM compiler (3-5 days)
+
+Goal: a 36-op register-based VM, exactly mirroring the reference's `bv`-style
+big-if dispatch.
+
+**New files:**
+
+- `src/vm/opcodes.ts` — op enum: `MOVE / LOADI / LOADK / LOADG / LOADU /
+  STORE / STOREL / SETUPVAL / ADD / SUB / MUL / DIV / MOD / POW / UNM / NOT
+  / LEN / EQ / LT / LE / GT / GE / NEQ / TEST / TESTSET / CONCAT /
+  GETFIELD / SETFIELD / GETMETHOD / SELF / CALL / TAILCALL / RETURN /
+  JMP / JUMPIF / JUMPIFNOT / CLOSURE / VARARG`.
+- `src/vm/encoder.ts` — variable-length instruction encoding (op = 1 byte +
+  up to 4 arguments encoded with `0x80` continuation bits, like Lua 5.x).
+- `src/vm/constants.ts` — constant pool manager (numbers + strings).
+- `src/vm/compiler.ts` — IR → bytecode emitter.
+
+**Modify:**
+
+- `src/transforms/flatten.ts` — re-target to compile-and-embed, so each
+  IR-compiled bytecode blob is appended to the function pool.
+
+### v0.4 — Luau runtime template (4-7 days)
+
+Goal: emit a standalone `.lua` interpreter that decodes + runs the bytecode
+above. This is **the** file that, once compiled, lets the obfuscated output
+run on Roblox without `--vm`.
+
+**New files:**
+
+- `src/runtime/template.lua.ts` — emits the Luau interpreter source as a
+  *string*. The interpreter mirrors the reference's shape:
+  - 32-entry dispatch table `a[...]`,
+  - LZW decoder `N(O)`,
+  - XOR stream cipher `aP / aW / aT`,
+  - 4-byte/1-byte/IEEE754/varint decoders (`aj / aq / au / aF`),
+  - the big if-elif dispatch loop `bv = bj[bo]; bv ...`,
+  - recursive sub-function decoder `b3`.
+
+**Implementation strategy:**
+
+1. Hand-write the interpreter as a **TS template** (not generated; it's
+   ~6000 LoC in the reference, half of which is dispatcher cases). Output it
+   as a constant string in the Luau emit pipeline.
+2. Add a single function `emitRuntime(seed)` that returns the runtime,
+   with the cipher key patched in.
+3. In `pipeline/obfuscate.ts`, when VM mode is enabled, the final emitted
+   program is `runtime + bytecode-blob + bootstrap`.
+
+**Tests:**
+
+- `tests/vm-roundtrip.test.ts` — for each `examples/*.lua`, obfuscate with
+  `--vm`, run the output through a Node-side shim that loads it via
+  `eval` (a fallback interpreter); verify behavior.
+
+### v0.5 — Decryptor (1-2 days)
+
+Goal: the decrypt CLI parses an obfuscated program and dumps:
+1. master key + LZW string pool (decoded strings)
+2. bytecode disassembly (per-function)
+3. reconstructed pseudo-Luau (best-effort, single basic block per reachable
+   state machine state)
+
+**New files:**
+
+- `src/decrypt/parser.ts` — re-use the v0.1 lexer to find the dispatch
+  table literal and the per-string IIFEs.
+- `src/decrypt/bytecode.ts` — disassemble a bytecode blob using
+  `src/vm/encoder.ts` in reverse.
+- `src/decrypt/ir.ts` — bytecode → pseudo-IR (three-address form).
+- `src/decrypt/index.ts` — orchestrator.
+
+**Tests:**
+
+- `tests/decrypt.test.ts` — for an input + seed, obfuscate, then decrypt,
+  verify (a) decoded strings match the inputs, (b) opcode sequence
+  matches.
+
+---
+
+## A note on the reference sample itself
+
+The full reference is at
+`/storage/emulated/0/Download/Operit/cleanOnExit/attachment_3850277964894214833.txt`
+(~159 KB). When you implement F4 (runtime template), look at:
+
+- The 32-entry dispatch table — it's at the top of the file; literally
+  `local a={"6","x","C","2","5","A","8",_G,"1","F", ...}`. Position-mixed
+  integer/string/global entries.
+- `aT` and `aW` — the XOR encrypt / decrypt pair. The XOR uses a
+  *position-dependent* key, not a static one.
+- `N(O)` — the LZW decoder. The dictionary starts at size 256; output
+  is a string.
+- `a0` — the bit32.xor-and-sub helper (`function(a1, b) return a1 % 2 ~= b % 2 and ... end`
+  — same shape as the reference's earlier `xor` reducer but simpler).
+- `bg(b7, bh, bi)` — the function interpreter. Take the shape, not the
+  names.
+- `b3()` — sub-function dispatcher; recursively rebuilds the function
+  pool.
+
+The reference is ~6000 LoC for the runtime alone. Re-implementing it
+faithfully from scratch is the slowest but safest path. Cheaper alternatives
+worth considering:
+
+- **Re-target** an existing Lua 5.x bytecode interpreter (lua.vm.js
+  exists, ~700 LoC; but the reference uses *custom* opcodes).
+- **Pragmatic subset**: identify the *10-20 ops* the reference actually
+  uses (look for `if bv <= N then if bv <= M then ...`) and ship a
+  narrowed interpreter that handles common Lua semantics.
+
+My recommendation: do v0.4 as a **pragmatic subset** (~30 ops actually used,
+not 60), then expand op coverage later.
+
+---
+
+## Known v0.1 issues (must fix before v0.2)
+
+1. `transforms/numbers.ts::obfuscateNumbers` does NOT actually mutate the
+   token stream usefully — the pipeline redoes D2 on the AST instead.
+   Either delete the function or rewire it to consume the same RNG state
+   as the pipeline (so seeded output is reproducible either way).
+2. `src/transforms/identifier.ts::buildMapping` only emits single-char
+   names; for >53 names it produces a 2-char scheme that uses positions
+   `0..25` and `0..51` and may collide. Replace with an
+   injectively-mapped scheme (e.g. base-52 with explicit skipping).
+3. `parse()` does NOT round-trip — e.g. hex literals are kept as raw
+   strings; `(function ...) end` with a table-string call arg may emit
+   wrong. The emitter assumes the AST was in canonical form. Verify with
+   obfuscate→luau-cli for `examples/hello.lua` before expanding scope.
+4. The emit `'__STR__'` synthetic token in
+   `transforms/strings.ts::obfuscateStrings` is dead code — the pipeline
+   walks the AST and never sees the token. Safe to delete.
+
+---
+
+## How to verify v0.1 actually runs
+
+```bash
+npm install
+npm test
+```
+
+If `npm install` fails because of network restrictions, the build still
+works for users with access (the source does not depend on anything
+beyond commander + vitest). For your local testing on this workspace you
+may need:
+
+```bash
+npm install --no-audit --prefer-offline
+```
+
+If you have access to a luau interpreter (luau-cli, the Roblox Studio
+console, or a custom npm-wrapped version), drop the obfuscated output
+into a `print()` and confirm it produces the same output as the original
+source. If you don't, rely on `tests/roundtrip.test.ts` to confirm
+cipher identity.
+
+---
+
+## Test data references
+
+- `examples/hello.lua` — should obfuscate to a 500-1000 char program.
+- `examples/reference-slice.lua` — should *not* be obfuscated by v0.1
+  (it already mimics reference output). Use it as a parsing stress test
+  in v0.2.
+- `examples/reference.lua` — same as above, with a comment explaining
+  why we don't touch it.
+
+A useful next example for v0.3+:
+`examples/game-hello.lua` — touches Roblox API:
+```lua
+game:GetService("Players").LocalPlayer.Character:WaitForChild("Humanoid")
+```
+This will exercise index chains + method calls + string encryption on
+realistic identifiers.
