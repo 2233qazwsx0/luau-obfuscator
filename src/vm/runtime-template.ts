@@ -1,21 +1,25 @@
 // src/vm/runtime-template.ts — Wrap packed bytecode in a Luau runtime template.
 //
 // Reads runtime/vm-runtime.template.lua, substitutes placeholders, and applies
-// v0.5 memory-protection marker stripping based on opts.
+// v0.5/v0.7 runtime-protection marker handling based on opts.
 //
 // Marker scheme (Lua long-comment delimited, keeps template valid Luau):
 //   --[[__MEMWIPE_BEGIN__]]   ... --[[__MEMWIPE_END__]]      → kept if memwipe
 //   --[[__ANTIDUMP_HELPERS_BEGIN__]] ... _END__              → kept if antidump
 //   --[[__ANTIDUMP_BOOT_BEGIN__]]   ... _END__               → kept if antidump
+//   --[[__BLOB_DEFS_BEGIN__]]  ... --[[__BLOB_DEFS_END__]]   → 碎片化/单串替换
 // When disabled, the whole region (incl. markers) is stripped to empty.
 //
-// v0.4: plain substitution (no self-obfuscation yet). The runtime template
-// runs as-is; the bytecode blob is already LZW+XOR protected.
+// v0.7 碎片化：把完整 hex blob 拆成 N 个碎片（含假碎片），存入打乱顺序的表，
+// 用一串顶层赋值语句按真实顺序拼接。D4 平坦化把每条拼接语句散入独立 dispatch
+// case；D5 注入死代码碎片；D2 混淆拼接索引；D3 加密碎片内容。
+//
+// 记住我们面向的是 luau，加密后的也是 luau。
 
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { genFakeBlob, type MemWipeOptions, DEFAULT_MEMWIPE } from "./memory.js";
+import { genFakeBlob, DEFAULT_RUNTIME_PROTECT, type RuntimeProtectOptions } from "./memory.js";
 
 const TEMPLATE_PATH = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -24,7 +28,6 @@ const TEMPLATE_PATH = resolve(
 
 /** 从模板里剥离一对 marker 之间的内容（含 marker 行本身）。 */
 function stripRegion(src: string, begin: string, end: string): string {
-  // 匹配 begin ... end（跨行，非贪婪），含前导空白与尾随换行一并去掉。
   const re = new RegExp(
     `[^\\n]*--\\[\\[${begin}\\]\\][\\s\\S]*?--\\[\\[${end}\\]\\][^\\n]*\\n?`,
     "g",
@@ -39,23 +42,120 @@ function stripMarkers(src: string, begin: string, end: string): string {
   return src.replace(beginRe, "").replace(endRe, "");
 }
 
+/** mulberry32 PRNG（内联，避免与 util 循环依赖）。 */
+function mulberry32(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * 生成碎片化的 hex blob 装配代码（v0.7）。
+ *
+ * 把 `hex` 拆成 M 个真碎片 + K 个假碎片，混入同一张表并打乱存储顺序，
+ * 然后用一串顶层赋值语句按真实装配顺序拼接出 `varName`。
+ *
+ * - 每条拼接语句是独立的普通语句 → buildIR 切成独立 block → D4 散入各自 dispatch case
+ * - 假碎片留在表里但永不引用 → 攻击者无法区分真假
+ * - 拼接索引是数字字面量 → D2 数字混淆
+ * - 碎片字符串 → D3 字符串加密
+ * - 装配完成后 `_frags = nil` 清空碎片表
+ *
+ * @param varName 目标变量名（如 HEX_BLOB）
+ * @param hex     待碎片化的完整 hex 字符串
+ * @param seed    PRNG 种子
+ * @returns 顶层 Lua 语句序列（表定义 + 拼接赋值 + 清空）
+ */
+function genFragmentedAssembly(varName: string, hex: string, seed: number): string {
+  const rand = mulberry32(seed);
+  const hexChars = "0123456789ABCDEF";
+
+  // 真碎片数 M：20-80，且每片 >= 8 hex 字符。
+  const maxByLen = Math.max(1, Math.floor(hex.length / 8));
+  const M = Math.max(1, Math.min(80, Math.min(maxByLen, 20 + Math.floor(rand() * 61))));
+  // 假碎片数 K：M 的 20-40%，最少 4 个。
+  const K = Math.max(4, Math.floor(M * (0.2 + rand() * 0.2)));
+  const N = M + K;
+
+  // 把 hex 切成 M 个真碎片（大致等长，余数均匀分配）。
+  const realFrags: string[] = [];
+  const base = Math.floor(hex.length / M);
+  let rem = hex.length % M;
+  let pos = 0;
+  for (let i = 0; i < M; i++) {
+    const len = base + (rem > 0 ? 1 : 0);
+    realFrags.push(hex.slice(pos, pos + len));
+    pos += len;
+    if (rem > 0) rem--;
+  }
+
+  // 假碎片：随机 hex，随机长度 8-40。
+  const fakeFrags: string[] = [];
+  for (let i = 0; i < K; i++) {
+    const flen = 8 + Math.floor(rand() * 33);
+    let f = "";
+    for (let j = 0; j < flen; j++) f += hexChars[Math.floor(rand() * 16)]!;
+    fakeFrags.push(f);
+  }
+
+  // 存储：真+假合并后 Fisher-Yates 打乱。
+  const storage: { hex: string; realOrder: number }[] = [];
+  for (let i = 0; i < M; i++) storage.push({ hex: realFrags[i]!, realOrder: i });
+  for (let i = 0; i < K; i++) storage.push({ hex: fakeFrags[i]!, realOrder: -1 });
+  for (let i = N - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    const tmp = storage[i]!;
+    storage[i] = storage[j]!;
+    storage[j] = tmp;
+  }
+
+  // pick[i] = 第 i 个真碎片（装配顺序）的 1-based 存储下标。
+  const pick: number[] = new Array(M);
+  for (let i = 0; i < N; i++) {
+    if (storage[i]!.realOrder >= 0) {
+      pick[storage[i]!.realOrder] = i + 1;
+    }
+  }
+
+  // 生成 Lua：表字面量 + 顺序拼接赋值 + 清空。
+  const tblName = `_frags_${varName}`;
+  const lines: string[] = [];
+  lines.push(`local ${tblName} = {`);
+  for (let i = 0; i < N; i++) {
+    lines.push(`  ${JSON.stringify(storage[i]!.hex)},`);
+  }
+  lines.push(`}`);
+  lines.push(`local ${varName} = ""`);
+  for (let i = 0; i < M; i++) {
+    lines.push(`${varName} = ${varName} .. ${tblName}[${pick[i]}]`);
+  }
+  lines.push(`${tblName} = nil`);
+  return lines.join("\n");
+}
+
 /**
  * Build the final executable Luau script by injecting the packed bytecode
  * hex blob and cipher key into the runtime template.
  *
  * @param hex       Packed hex bytecode (from compileVM().hex)
  * @param cipherKey Stream cipher key (0-255)
- * @param opts      Memory-protection options (default: both enabled)
+ * @param opts      运行时保护选项（默认全开）
  * @returns Final Luau source that, when executed, decodes and runs the bytecode
  */
 export function buildRuntime(
   hex: string,
   cipherKey: number,
-  opts: MemWipeOptions = DEFAULT_MEMWIPE,
+  opts: RuntimeProtectOptions = DEFAULT_RUNTIME_PROTECT,
 ): string {
   let template = readFileSync(TEMPLATE_PATH, "utf8");
   const memwipe = opts.memwipe !== false;
   const antidump = opts.antidump !== false;
+  const frag = opts.frag !== false;
 
   // 1. 内存清理区段：禁用时剥离整段，启用时只去掉 marker 注释行。
   if (!memwipe) {
@@ -73,14 +173,34 @@ export function buildRuntime(
     template = stripMarkers(template, "__ANTIDUMP_BOOT_BEGIN__", "__ANTIDUMP_BOOT_END__");
   }
 
-  // 3. 占位符替换。
-  //    hex 字符串是纯 [0-9A-F]，在 Lua 双引号字符串里安全。
-  //    FAKE_BLOB：antidump 启用时生成假诱饵，禁用时填空串（FAKE_BLOB 局部不再被引用）。
+  // 3. hex blob 定义区段：碎片化或单串替换。
   const fakeBlob = antidump ? genFakeBlob(hex.length, cipherKey ^ 0xFEEDFACE) : "";
-  template = template
-    .replace('"__HEX_BLOB__"', JSON.stringify(hex))
-    .replace('"__FAKE_BLOB__"', JSON.stringify(fakeBlob))
-    .replace(/__CIPHER_KEY__/g, String(cipherKey));
+  const fragSeed = (cipherKey ^ 0x7017CAFE) >>> 0;
+
+  let blobDefs: string;
+  if (frag) {
+    // v0.7 碎片化：HEX_BLOB 总是碎片化；FAKE_BLOB 仅在 antidump 开启时碎片化，
+    // 否则空串（antidump 关闭时 FAKE_BLOB 不会被引用，碎片化无意义）。
+    const hexAsm = genFragmentedAssembly("HEX_BLOB", hex, fragSeed);
+    const fakeAsm = antidump
+      ? genFragmentedAssembly("FAKE_BLOB", fakeBlob, (fragSeed ^ 0xAA55) >>> 0)
+      : `local FAKE_BLOB = ""`;
+    blobDefs = `${hexAsm}\n${fakeAsm}`;
+  } else {
+    // 单串模式（原 v0.4 行为）。
+    blobDefs =
+      `local HEX_BLOB = ${JSON.stringify(hex)}\n` +
+      `local FAKE_BLOB = ${JSON.stringify(fakeBlob)}`;
+  }
+  // 替换整个 __BLOB_DEFS__ 区段（含 marker）为生成的代码。
+  const blobRe = new RegExp(
+    `[^\\n]*--\\[\\[__BLOB_DEFS_BEGIN__\\]\\][\\s\\S]*?--\\[\\[__BLOB_DEFS_END__\\]\\][^\\n]*\\n?`,
+    "g",
+  );
+  template = template.replace(blobRe, blobDefs + "\n");
+
+  // 4. cipher key 替换（数字字面量）。
+  template = template.replace(/__CIPHER_KEY__/g, String(cipherKey));
 
   return template;
 }

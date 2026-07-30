@@ -53,12 +53,13 @@ export function runPipeline(src, opts = {}) {
     if (opts.vm) {
         if (opts.runtime) {
             // v0.4: wrap bytecode in Luau runtime template → executable script
-            // v0.5: pass memory-protection options through to the template builder.
-            const mem = {
+            // v0.5/v0.7: pass runtime-protection options through to the template builder.
+            const rtOpts = {
                 memwipe: !opts.noMemwipe,
                 antidump: !opts.noAntidump,
+                frag: !opts.noFrag,
             };
-            const runtimeSrc = compileVMWithRuntime(ast, seed, mem);
+            const runtimeSrc = compileVMWithRuntime(ast, seed, rtOpts);
             // Self-obfuscate the runtime template through the D1-D5 pipeline.
             // The recursive call must NOT set vm/runtime (no infinite loop).
             // A derived seed keeps the template's obfuscation independent of the

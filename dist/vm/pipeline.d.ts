@@ -1,4 +1,4 @@
-import { type MemWipeOptions } from "./memory.js";
+import { type RuntimeProtectOptions } from "./memory.js";
 import type { Node } from "../parser/parser.js";
 export interface VmResult {
     /** Hex-encoded packed bytecode string */
@@ -25,7 +25,7 @@ export declare function compileVM(ast: Node, seed: number): VmResult;
  *
  * @param ast  - The parsed AST (Block node)
  * @param seed - PRNG seed
- * @param mem  - 内存清理 / 反 dump 选项（默认全开）
+ * @param opts - 运行时保护选项（内存清理 / 反 dump / 碎片化，默认全开）
  * @returns Final Luau source that decodes and executes the bytecode
  */
-export declare function compileVMWithRuntime(ast: Node, seed: number, mem?: MemWipeOptions): string;
+export declare function compileVMWithRuntime(ast: Node, seed: number, opts?: RuntimeProtectOptions): string;

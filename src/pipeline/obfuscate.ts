@@ -13,7 +13,7 @@ import { mulberry32, randInt } from "../util/prng.js";
 import { flattenAST } from "../ir/flatten.js";
 import { injectDeadcode } from "../transforms/deadcode.js";
 import { compileVM, compileVMWithRuntime } from "../vm/pipeline.js";
-import { type MemWipeOptions } from "../vm/memory.js";
+import { type RuntimeProtectOptions } from "../vm/memory.js";
 
 export interface ObfuscateOptions {
   seed?: number;
@@ -37,6 +37,8 @@ export interface ObfuscateOptions {
   noMemwipe?: boolean;
   /** Disable anti-dump decoy blob (v0.5). */
   noAntidump?: boolean;
+  /** Disable hex blob fragmentation (v0.7). */
+  noFrag?: boolean;
 }
 
 export interface ObfuscateResult {
@@ -94,12 +96,13 @@ export function runPipeline(src: string, opts: ObfuscateOptions = {}): Obfuscate
   if (opts.vm) {
     if (opts.runtime) {
       // v0.4: wrap bytecode in Luau runtime template → executable script
-      // v0.5: pass memory-protection options through to the template builder.
-      const mem: MemWipeOptions = {
+      // v0.5/v0.7: pass runtime-protection options through to the template builder.
+      const rtOpts: RuntimeProtectOptions = {
         memwipe: !opts.noMemwipe,
         antidump: !opts.noAntidump,
+        frag: !opts.noFrag,
       };
-      const runtimeSrc = compileVMWithRuntime(ast, seed, mem);
+      const runtimeSrc = compileVMWithRuntime(ast, seed, rtOpts);
       // Self-obfuscate the runtime template through the D1-D5 pipeline.
       // The recursive call must NOT set vm/runtime (no infinite loop).
       // A derived seed keeps the template's obfuscation independent of the

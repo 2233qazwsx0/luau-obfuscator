@@ -19,7 +19,8 @@ program
     .option("--vm", "VM bytecode mode: AST → bytecode → LZW+XOR → hex (experimental)")
     .option("--runtime", "wrap VM bytecode in Luau runtime template (implies --vm, v0.4)")
     .option("--no-memwipe", "disable runtime memory wiping (secure_nil + GC, v0.5)")
-    .option("--no-antidump", "disable anti-dump decoy blob (v0.5)");
+    .option("--no-antidump", "disable anti-dump decoy blob (v0.5)")
+    .option("--no-frag", "disable hex blob fragmentation (v0.7)");
 program.action((opts) => {
     const src = readFileSync(resolve(opts.input), "utf8");
     const seed = opts.seed && opts.seed !== "0" ? Number(opts.seed) : undefined;
@@ -35,6 +36,7 @@ program.action((opts) => {
         runtime: opts.runtime === true,
         noMemwipe: opts.memwipe === false,
         noAntidump: opts.antidump === false,
+        noFrag: opts.frag === false,
     });
     if (opts.out) {
         writeFileSync(resolve(opts.out), out, "utf8");

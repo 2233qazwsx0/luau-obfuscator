@@ -543,9 +543,13 @@ end
 -- --------------------------------------------------------------------------
 -- Boot
 -- --------------------------------------------------------------------------
--- __FAKE_BLOB__ 由 runtime-template.ts 替换为假字节码 hex 字符串（反 dump 诱饵）。
+--[[__BLOB_DEFS_BEGIN__]]
+-- v0.7: HEX_BLOB/FAKE_BLOB 定义由 runtime-template.ts 替换。
+--   碎片化开启：替换为一串顶层赋值（碎片表 + 顺序拼接 + 清空）。
+--   碎片化关闭：替换为单串 local 定义。
 local HEX_BLOB = "__HEX_BLOB__"
 local FAKE_BLOB = "__FAKE_BLOB__"
+--[[__BLOB_DEFS_END__]]
 local CIPHER_KEY = __CIPHER_KEY__
 
 local function vm_boot()

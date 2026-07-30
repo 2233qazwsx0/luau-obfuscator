@@ -7,7 +7,7 @@ import { compileAST } from "./compiler.js";
 import { serializeFunction } from "./encoder.js";
 import { packBytecode } from "./packer.js";
 import { buildRuntime } from "./runtime-template.js";
-import { DEFAULT_MEMWIPE } from "./memory.js";
+import { DEFAULT_RUNTIME_PROTECT } from "./memory.js";
 /**
  * Derive the stream cipher key from the seed.
  * The runtime template needs this to decrypt the bytecode.
@@ -35,11 +35,11 @@ export function compileVM(ast, seed) {
  *
  * @param ast  - The parsed AST (Block node)
  * @param seed - PRNG seed
- * @param mem  - 内存清理 / 反 dump 选项（默认全开）
+ * @param opts - 运行时保护选项（内存清理 / 反 dump / 碎片化，默认全开）
  * @returns Final Luau source that decodes and executes the bytecode
  */
-export function compileVMWithRuntime(ast, seed, mem = DEFAULT_MEMWIPE) {
+export function compileVMWithRuntime(ast, seed, opts = DEFAULT_RUNTIME_PROTECT) {
     const { hex, cipherKey } = compileVM(ast, seed);
-    return buildRuntime(hex, cipherKey, mem);
+    return buildRuntime(hex, cipherKey, opts);
 }
 //# sourceMappingURL=pipeline.js.map

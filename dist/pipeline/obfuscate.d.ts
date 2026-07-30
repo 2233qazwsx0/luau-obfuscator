@@ -21,6 +21,8 @@ export interface ObfuscateOptions {
     noMemwipe?: boolean;
     /** Disable anti-dump decoy blob (v0.5). */
     noAntidump?: boolean;
+    /** Disable hex blob fragmentation (v0.7). */
+    noFrag?: boolean;
 }
 export interface ObfuscateResult {
     out: string;

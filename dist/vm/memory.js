@@ -1,15 +1,15 @@
-// src/vm/memory.ts — 内存清理与反 dump（v0.5）。
+// src/vm/memory.ts — 运行时保护选项 + 反 dump 假 blob 生成（v0.5/v0.7）。
 //
+// 本文件只提供：选项类型 + 假 blob 生成器（需要 TS 侧 PRNG 计算）。
 // 实际的 Lua 内存清理代码直接写在 runtime/vm-runtime.template.lua 里，用
-// `--[[__MEMWIPE_BEGIN__]]` / `--[[__MEMWIPE_END__]]` 这类 marker 注释包裹。
-// runtime-template.ts 根据 opts 决定保留还是剥离对应区段，并在需要时注入
-// 假 blob。本文件只提供：选项类型 + 假 blob 生成器（需要 TS 侧 PRNG 计算）。
+// marker 注释包裹，由 runtime-template.ts 根据 opts 决定保留/剥离。
 //
 // 记住我们面向的是 luau，加密后的也是 luau。
-/** 默认开启。 */
-export const DEFAULT_MEMWIPE = {
+/** 默认全开。 */
+export const DEFAULT_RUNTIME_PROTECT = {
     memwipe: true,
     antidump: true,
+    frag: true,
 };
 /**
  * 生成一段假字节码 blob（hex 字符串），用于反 dump 诱饵。
