@@ -1,0 +1,12 @@
+// src/index.ts - Public entry point. Re-export the pipeline + transforms.
+export { runPipeline, obfuscateSource } from "./pipeline/obfuscate.js";
+export { lex } from "./parser/lexer.js";
+export { parse } from "./parser/parser.js";
+export { emit } from "./emit/emitter.js";
+export { encryptString, decryptString, buildCipher } from "./transforms/strings.js";
+export { renameIdentifiers } from "./transforms/identifier.js";
+export { mulberry32 } from "./util/prng.js";
+export { flattenAST } from "./ir/flatten.js";
+export { buildIR, shuffleArray } from "./ir/ir.js";
+export { injectDeadcode } from "./transforms/deadcode.js";
+export { compileVM } from "./vm/pipeline.js";
