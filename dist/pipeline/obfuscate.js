@@ -36,7 +36,20 @@ export function runPipeline(src, opts = {}) {
     catch (e) {
         throw new Error(`parse error: ${e.message}`);
     }
-    // If VM mode requested, branch here: compile to bytecode, skip D2/D3/D4/emit
+    // 3.5. Dead code injection (D5): AST -> AST rewrite.
+    // v0.6: 在 VM 编译前执行，让字节码里跑的也是含死代码的混淆版本。
+    // Runs before D4 so dead code nodes get flattened into dispatch cases.
+    if (!opts.noDeadcode) {
+        ast = injectDeadcode(ast, seed);
+    }
+    // 3.6. Control-flow flattening (D4): AST -> AST rewrite.
+    // v0.6: 在 VM 编译前执行。攻击者解字节码后还要再逆向一层 D4 才能还原原始控制流。
+    // Runs before VM compile / D2/D3 so the walk passes cover all new dispatch nodes.
+    if (!opts.noFlatten) {
+        ast = flattenAST(ast, seed);
+    }
+    // If VM mode requested, branch here: compile to bytecode, skip D2/D3/emit.
+    // v0.6: VM 编译器现在接收的是已经经过 D1+D5+D4 混淆的 AST，字节码内嵌混淆代码。
     if (opts.vm) {
         if (opts.runtime) {
             // v0.4: wrap bytecode in Luau runtime template → executable script
@@ -64,16 +77,6 @@ export function runPipeline(src, opts = {}) {
         }
         const vmResult = compileVM(ast, seed);
         return { out: vmResult.hex, cipher, nameMap: renameMap, vmHex: vmResult.hex };
-    }
-    // 3.5. Dead code injection (D5): AST -> AST rewrite.
-    // Runs before D4 so dead code nodes get flattened into dispatch cases.
-    if (!opts.noDeadcode) {
-        ast = injectDeadcode(ast, seed);
-    }
-    // 3.6. Control-flow flattening (D4): AST -> AST rewrite.
-    // Runs before D2/D3 so the walk passes cover all new dispatch nodes.
-    if (!opts.noFlatten) {
-        ast = flattenAST(ast, seed);
     }
     // 4. Number obfuscation: walk AST, attach __obf meta on Number nodes
     if (!opts.noNumbers) {
