@@ -1,0 +1,47 @@
+{
+  "name": "luau-obfuscator",
+  "version": "0.1.0",
+  "description": "High-strength Luau obfuscator + decryptor. Mirrors the bytecode-VM / LZW+XOR / bitxor / dispatch-table style of the reference script '猫猫脚本 114514'.",
+  "type": "module",
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "main": "dist/cli/obfuscate.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./obfuscate": "./dist/cli/obfuscate.js",
+    "./decrypt": "./dist/cli/decrypt.js"
+  },
+  "bin": {
+    "luau-obfuscate": "dist/cli/obfuscate.js",
+    "luau-decrypt": "dist/cli/decrypt.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "obfuscate": "node --experimental-strip-types src/cli/obfuscate.ts",
+    "decrypt": "node --experimental-strip-types src/cli/decrypt.ts",
+    "bench": "node --experimental-strip-types tools/benchmark.ts",
+    "lint": "tsc --noEmit"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "luau",
+    "obfuscator",
+    "vm",
+    "bytecode",
+    "lua",
+    "roblox"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.4.0",
+    "commander": "^12.0.0"
+  }
+}
