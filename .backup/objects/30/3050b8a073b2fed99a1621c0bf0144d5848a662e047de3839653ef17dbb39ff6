@@ -1,0 +1,38 @@
+import { parse, lex } from "./src/parser/parser.js";
+import { readFileSync } from "node:fs";
+
+// Test 1: method call with ()
+let tokens = lex("x:Play()");
+let ast = parse(tokens);
+console.log("[1] method(): %s t=%s name=%s", ast && ast.body && ast.body[0] ? "OK" : "FAIL",
+  ast?.body?.[0]?.t, ast?.body?.[0]?.name || "");
+
+// Test 2: method call with string arg (不带括号)
+tokens = lex('x:Play "hi"');
+ast = parse(tokens);
+console.log("[2] method string: OK t=%s name=%s args=%d",
+  ast.body[0].t, ast.body[0].name, ast.body[0].args.length);
+
+// Test 3: method call with {table} arg
+tokens = lex("x:Play {a=1}");
+ast = parse(tokens);
+console.log("[3] method table: OK t=%s name=%s args=%d",
+  ast.body[0].t, ast.body[0].name, ast.body[0].args.length);
+
+// Test 4: chained methods with anonymous function
+tokens = lex('x.Completed:Connect(function() print("ok") end)');
+ast = parse(tokens);
+console.log("[4] chain method(anon-fn): %s t=%s name=%s",
+  ast.body[0] ? "OK" : "FAIL", ast.body[0].t, ast.body[0].name);
+
+// Test 5: hello.lua roundtrip
+tokens = lex(readFileSync("examples/hello.lua", "utf8"));
+ast = parse(tokens);
+console.log("[5] hello.lua: OK body.len=%d", ast.body.length);
+
+// Test 6: combo.lua roundtrip
+tokens = lex(readFileSync("examples/combo.lua", "utf8"));
+ast = parse(tokens);
+console.log("[6] combo.lua: OK body.len=%d", ast.body.length);
+
+console.log("=== ALL PARSER TESTS PASSED ===");
