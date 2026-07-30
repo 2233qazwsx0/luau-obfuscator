@@ -11,3 +11,4 @@ export { buildIR, shuffleArray } from "./ir/ir.js";
 export { injectDeadcode } from "./transforms/deadcode.js";
 export { compileVM, compileVMWithRuntime, deriveCipherKey } from "./vm/pipeline.js";
 export { buildRuntime } from "./vm/runtime-template.js";
+//# sourceMappingURL=index.js.map

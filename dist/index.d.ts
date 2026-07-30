@@ -1,4 +1,3 @@
-// src/index.ts - Public entry point. Re-export the pipeline + transforms.
 export { runPipeline, obfuscateSource } from "./pipeline/obfuscate.js";
 export { lex } from "./parser/lexer.js";
 export { parse } from "./parser/parser.js";

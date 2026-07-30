@@ -30,7 +30,7 @@ export type Node =
   | { t: "Repeat"; block: Node; cond: Node; line: number }
   | { t: "For"; varName: string; varType: string | null; start: Node; stop: Node; step: Node | null; block: Node; line: number }
   | { t: "ForIn"; names: string[]; types: (string | null)[]; iter: Node[]; block: Node; line: number }
-  | { t: "Function"; name: { parts: string[]; method?: string }; params: string[]; paramTypes: (string | null)[]; retType: string | null; body: Node; line: number }
+  | { t: "Function"; name: { parts: string[]; method?: string }; params: string[]; paramTypes: (string | null)[]; retType: string | null; body: Node; isLocal?: boolean; line: number }
   | { t: "Return"; values: Node[]; line: number }
   | { t: "Call"; callee: Node; args: Node[]; line: number }
   | { t: "Method"; name: string; callee: Node; args: Node[]; line: number }
@@ -176,7 +176,9 @@ function parseStmt(s: PState): Node | null {
     if (matchKw(s, "function")) {
       s.i++;
       const nameTok = eat(s, TokenKind.IDENT);
-      return parseFnDeclTail(s, nameTok.value, [nameTok.value]);
+      const node = parseFnDeclTail(s, nameTok.value, [nameTok.value]);
+      if (node.t === "Function" && "name" in node) node.isLocal = true;
+      return node;
     }
     // local NAME: Type [, NAME: Type] [= values]
     const names: string[] = [];
@@ -333,7 +335,13 @@ function parseStmt(s: PState): Node | null {
   // return
   if (t.kind === TokenKind.KEYWORD && t.value === "return") {
     s.i++;
-    const values = matchKw(s, "end") || matchOp(s, ";") || atEof(s) ? [] : parseExprList(s);
+    // Bare return (no values) when followed by a block terminator. Lua
+    // requires `return` to be the last statement in its block, so the
+    // following token must be one of: end / else / elseif / until / ; / EOF.
+    const bare =
+      matchKw(s, "end") || matchKw(s, "else") || matchKw(s, "elseif") ||
+      matchKw(s, "until") || matchOp(s, ";") || atEof(s);
+    const values = bare ? [] : parseExprList(s);
     return { t: "Return", values, line: t.line };
   }
   // do

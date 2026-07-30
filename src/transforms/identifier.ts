@@ -30,19 +30,31 @@ const KNOWN_GLOBALS: Set<string> = new Set([
 
 const SINGLE: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-/** Generate a stable mapping for a given seed. */
-function buildMapping(_seed: number, names: string[]): Map<string, string> {
+/** Generate a stable mapping for a given seed.
+ *  `avoid` is the set of identifier names that appear in the source but are
+ *  NOT being renamed (declared multiple times, globals, etc.). Generated
+ *  short names must not collide with these, or a renamed variable would
+ *  shadow / be shadowed by an unrenamed one. */
+function buildMapping(_seed: number, names: string[], avoid: Set<string>): Map<string, string> {
   const map = new Map<string, string>();
+  const SL = SINGLE.length; // 52 (a-z + A-Z)
   let idx = 0;
   for (const name of names) {
     if (RESERVED_LUA.has(name) || KNOWN_GLOBALS.has(name)) continue;
     if (name.startsWith("__") && name.endsWith("__")) continue;
-    // form: a, b, ..., z, aa, ab, ...  aA, aB...
-    const head = idx < 26 ? SINGLE[idx] : SINGLE[Math.floor(idx / 53) % 53];
-    const tail = idx < 53 ? "" : SINGLE[idx % 53] ?? "";
-    const renamed = tail ? head + tail : head;
+    // Generate a short name that doesn't collide with any unrenamed name.
+    // form: a, b, ..., z, A, ..., Z, aa, ab, ..., aZ, ba, ...
+    let renamed: string;
+    do {
+      if (idx < SL) {
+        renamed = SINGLE[idx]!;
+      } else {
+        const r = idx - SL;
+        renamed = SINGLE[Math.floor(r / SL) % SL]! + SINGLE[r % SL]!;
+      }
+      idx++;
+    } while (avoid.has(renamed) || RESERVED_LUA.has(renamed) || KNOWN_GLOBALS.has(renamed));
     map.set(name, renamed);
-    idx++;
   }
   return map;
 }
@@ -180,9 +192,59 @@ export function renameIdentifiers(tokens: Token[], seed: number): {
 } {
   const candidates = collectCandidateIdents(tokens);
   const names = [...candidates];
-  const map = buildMapping(seed, names);
-  const renamed = tokens.map((t) => {
+
+  // Collect ALL ident names that appear in the source but are NOT being
+  // renamed. These must be avoided when generating short names to prevent
+  // a renamed variable from colliding with (shadowing / being shadowed by)
+  // an unrenamed one. Example: if `p` is declared in two scopes (filtered
+  // out of candidates) and `state` is renamed to `p`, the renamed `state`
+  // would collide with the unrenamed `p`.
+  const avoid = new Set<string>();
+  for (const t of tokens) {
+    if (t.kind === TokenKind.IDENT && !candidates.has(t.value)) {
+      avoid.add(t.value);
+    }
+  }
+
+  const map = buildMapping(seed, names, avoid);
+
+  // Pre-pass: collect indices of IDENT tokens that are table-constructor
+  // field names. In `{ key = value }`, the IDENT `key` is a string field
+  // name (syntactic sugar for `{ ["key"] = value }`), NOT a variable.
+  // Renaming it would create a mismatch with dot-access (`t.key`), which
+  // we also skip. We detect these by: inside `{ }` AND immediately followed
+  // by a single `=` (not `==`).
+  const tableFieldIndices = new Set<number>();
+  let braceDepth = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (t.kind === TokenKind.OP && t.value === "{") {
+      braceDepth++;
+    } else if (t.kind === TokenKind.OP && t.value === "}") {
+      braceDepth--;
+    } else if (t.kind === TokenKind.IDENT && braceDepth > 0) {
+      const next = tokens[i + 1];
+      if (next && next.kind === TokenKind.OP && next.value === "=") {
+        tableFieldIndices.add(i);
+      }
+    }
+  }
+
+  const renamed = tokens.map((t, i) => {
     if (t.kind === TokenKind.IDENT && map.has(t.value)) {
+      // Skip field names: an IDENT preceded by '.' or ':' is a table field
+      // or method name, not a variable reference. Renaming it would break
+      // the field access (the table's keys don't change).
+      if (i > 0) {
+        const prev = tokens[i - 1]!;
+        if (prev.kind === TokenKind.OP && (prev.value === "." || prev.value === ":")) {
+          return t;
+        }
+      }
+      // Skip table-constructor field names (detected in the pre-pass).
+      if (tableFieldIndices.has(i)) {
+        return t;
+      }
       return { ...t, value: map.get(t.value)! };
     }
     return t;

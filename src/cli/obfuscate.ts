@@ -1,4 +1,4 @@
-// src/cli/obfuscate.ts - Basic-level CLI entry (v0.1) + flatten (v0.2).
+// src/cli/obfuscate.ts - Basic-level CLI entry (v0.1) + flatten (v0.2) + VM runtime (v0.4).
 import { Command } from "commander";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -17,7 +17,8 @@ program
   .option("--no-strings", "disable XOR string encryption")
   .option("--no-flatten", "disable control-flow flattening")
   .option("--no-deadcode", "disable dead code injection")
-  .option("--vm", "VM bytecode mode: AST → bytecode → LZW+XOR → hex (experimental)");
+  .option("--vm", "VM bytecode mode: AST → bytecode → LZW+XOR → hex (experimental)")
+  .option("--runtime", "wrap VM bytecode in Luau runtime template (implies --vm, v0.4)");
 
 program.action((opts) => {
   const src = readFileSync(resolve(opts.input), "utf8");
@@ -30,7 +31,8 @@ program.action((opts) => {
     noStrings: opts.strings === false,
     noFlatten: opts.flatten === false,
     noDeadcode: opts.deadcode === false,
-    vm: opts.vm === true,
+    vm: opts.vm === true || opts.runtime === true,
+    runtime: opts.runtime === true,
   });
   if (opts.out) {
     writeFileSync(resolve(opts.out), out, "utf8");

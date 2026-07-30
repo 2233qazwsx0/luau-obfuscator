@@ -139,6 +139,45 @@ class Compiler {
     return null;
   }
 
+  // ---- Upvalue resolution ----
+  // A variable referenced inside a function that is a local of an enclosing
+  // scope becomes an upvalue of the current function. We record an upvalue
+  // descriptor (fromStack + index) so the runtime can capture it at CLOSURE.
+
+  /**
+   * Resolve `name` as an upvalue of `func`. Returns the upvalue index (into
+   * func.scope.upvalues), or null if `name` is a local of the CURRENT scope
+   * (not an upvalue) or not found anywhere (→ global).
+   */
+  private resolveUpvalue(func: CompilerFunc, name: string): number | null {
+    if (func.scope.locals.has(name)) return null; // current-scope local
+    return this.findUpvalue(func, name, func.scope.parent);
+  }
+
+  private findUpvalue(func: CompilerFunc, name: string, scope: Scope | null): number | null {
+    if (!scope) return null;
+    if (scope.locals.has(name)) {
+      // Found in this enclosing scope → capture from its register stack.
+      return this.addUpvalueRef(func, true, scope.locals.get(name)!);
+    }
+    // Not here → recurse up; if found, it's an upvalue of our parent, so we
+    // re-export it (fromStack=false, index=parent's upvalue index).
+    const parentUpvalIdx = this.findUpvalue(func, name, scope.parent);
+    if (parentUpvalIdx !== null) {
+      return this.addUpvalueRef(func, false, parentUpvalIdx);
+    }
+    return null;
+  }
+
+  private addUpvalueRef(func: CompilerFunc, fromStack: boolean, index: number): number {
+    for (let i = 0; i < func.scope.upvalues.length; i++) {
+      const uv = func.scope.upvalues[i]!;
+      if (uv.fromStack === fromStack && uv.index === index) return i;
+    }
+    func.scope.upvalues.push({ fromStack, index });
+    return func.scope.upvalues.length - 1;
+  }
+
   // ---- Constant pool ----
 
   private addConst(func: CompilerFunc, entry: ConstEntry): number {
@@ -349,23 +388,23 @@ class Compiler {
           this.freeReg(func, tempReg);
         }
       } else if (target.t === "Index") {
-        // Table field assignment: R[target].R[index] = R[value]
+        // Table field assignment: R[target][key] = R[value]
         const tblReg = this.allocReg(func);
-        const idxReg = this.allocReg(func);
         const valReg = this.allocReg(func);
         this.compileExpr(func, target.obj, tblReg);
         this.compileExpr(func, value, valReg);
-        // Use SETTABLE: tbl[K[idx]] = val
         if (target.index.t === "String") {
+          // String key → SETTABLE (B = constant index)
           const constIdx = this.addConst(func, { type: "string", value: target.index.value });
           this.emitOp(func, Op.SETTABLE, tblReg, constIdx, valReg, 0, 0);
         } else {
-          // Dynamic index: compile into constIdx
+          // Dynamic register key → SETTABLE_RR (B = key register)
+          const idxReg = this.allocReg(func);
           this.compileExpr(func, target.index, idxReg);
-          this.emitOp(func, Op.SETTABLE, tblReg, idxReg, valReg, 0, 0);
+          this.emitOp(func, Op.SETTABLE_RR, tblReg, idxReg, valReg, 0, 0);
+          this.freeReg(func, idxReg);
         }
         this.freeReg(func, valReg);
-        this.freeReg(func, idxReg);
         this.freeReg(func, tblReg);
       }
     }
@@ -453,7 +492,8 @@ class Compiler {
     this.compileExpr(func, stmt.cond, condReg);
 
     // TEST_FALSE: if not cond then jump back to loop start
-    this.emitJump(func, Op.TEST_FALSE, condReg, loopStart - func.proto.instructions.length - 1);
+    // Jump convention: C = target - idx (same as JUMP/TEST).
+    this.emitJump(func, Op.TEST_FALSE, condReg, loopStart - func.proto.instructions.length);
     this.freeReg(func, condReg);
 
     // Patch all breaks
@@ -484,22 +524,31 @@ class Compiler {
       this.emitOp(func, Op.LOADK, stepReg, oneIdx, 0, 0, 0);
     }
 
-    // FORPREP: R[baseReg] -= R[stepReg]; jump to loop body start
-    const prepIdx = this.emitOp(func, Op.FORPREP, baseReg, 0, 0, 0, 0);
+    // FORPREP: R[baseReg] -= R[stepReg]; then jump FORWARD to FORLOOP.
+    // This skips the body on the first pass so the counter is incremented
+    // (and the loop var R[A+3] set) before the body ever runs — matches
+    // standard Lua VM numeric-for semantics.
+    // Use mode=2 (signed C) so negative offsets encode correctly.
+    const prepIdx = this.emitOp(func, Op.FORPREP, baseReg, 0, 0, 0, 2);
     const loopBodyStart = func.proto.instructions.length;
     func.loopStack.push({ loopStart: loopBodyStart, breakPatches: [] });
 
-    // Set counter = current value
+    // Set counter = current value (redundant w/ FORLOOP's R[A+3]=R[A], but
+    // keeps a clear register-init point for the body).
     this.emitOp(func, Op.MOVE, counterReg, baseReg, 0, 0, 0);
 
     // Loop body
     this.compileBlock(func, stmt.block);
 
-    // FORLOOP: R[baseReg] -= R[stepReg]; if within bounds, jump back to body start
-    this.emitOp(func, Op.FORLOOP, baseReg, 0, loopBodyStart - func.proto.instructions.length, baseReg, 0);
+    // FORLOOP: R[baseReg] += R[stepReg]; if within bounds, R[A+3]=R[A] and
+    // jump back to body start (loopBodyStart). Jump convention: C = target - idx.
+    const forloopIdx = this.emitOp(
+      func, Op.FORLOOP, baseReg, 0,
+      loopBodyStart - func.proto.instructions.length, 0, 2,
+    );
 
-    // Patch FORPREP jump
-    func.proto.instructions[prepIdx]!.C = loopBodyStart - prepIdx - 1;
+    // Patch FORPREP to jump forward to FORLOOP (skip body on first pass).
+    func.proto.instructions[prepIdx]!.C = forloopIdx - prepIdx;
 
     // Patch all breaks
     const top = func.loopStack.pop()!;
@@ -519,13 +568,37 @@ class Compiler {
 
   private compileForIn(func: CompilerFunc, stmt: Node): void {
     if (stmt.t !== "ForIn") return;
-    // Allocate registers for iterator state: R[A] = iterator function, R[A+1] = state, R[A+2] = control
+    // Register layout:
+    //   R[A]   = iterReg  (iterator function, preserved across iterations)
+    //   R[A+1] = stateReg (state, preserved)
+    //   R[A+2] = ctrlReg  (control, updated each iteration to first loop var)
+    //   R[A+3] = callBase / varRegs[0]  (callee + first loop var)
+    //   R[A+4] = varRegs[1] / call arg1 (state)
+    //   R[A+5] = varRegs[2] / call arg2 (control)  [or temp if numVars < 3]
+    //
+    // CALL_RET_N puts results starting at the callee register, so the
+    // iterator call must use callBase (= varRegs[0]) as A. Before each
+    // call, we MOVE iter/state/ctrl into the call positions.
     const iterReg = this.allocReg(func);
     const stateReg = this.allocReg(func);
     const ctrlReg = this.allocReg(func);
 
-    // Compile iterator expressions (e.g., pairs(t), ipairs(t))
-    if (stmt.iter.length === 1) {
+    // Compile iterator expressions (e.g., pairs(t), ipairs(t)).
+    // For a single call like `pairs(t)`, we need a multi-result call (3
+    // results) to fill iterReg, stateReg, ctrlReg simultaneously.
+    if (stmt.iter.length === 1 && stmt.iter[0]!.t === "Call") {
+      const callExpr = stmt.iter[0]!;
+      // Compile callee into iterReg, args right after it (stateReg, ctrlReg)
+      this.compileExpr(func, callExpr.callee, iterReg);
+      for (let i = 0; i < callExpr.args.length; i++) {
+        const reg = iterReg + 1 + i;
+        func.scope.nextReg = Math.max(func.scope.nextReg, reg + 1);
+        this.compileExpr(func, callExpr.args[i]!, reg);
+      }
+      // CALL_RET_N with 3 results → fills iterReg, stateReg, ctrlReg
+      this.emitOp(func, Op.CALL_RET_N, iterReg, callExpr.args.length, 3, 0, 0);
+      func.scope.nextReg = ctrlReg + 1;
+    } else if (stmt.iter.length === 1) {
       this.compileExpr(func, stmt.iter[0]!, iterReg);
     } else if (stmt.iter.length >= 2) {
       this.compileExpr(func, stmt.iter[0]!, iterReg);
@@ -535,44 +608,64 @@ class Compiler {
       }
     }
 
-    // Allocate loop variables
-    const varRegs: number[] = [];
-    for (const name of stmt.names) {
-      varRegs.push(this.allocReg(func, name));
+    // Allocate loop variable registers starting at callBase = ctrlReg + 1.
+    // The call needs callee at callBase and 2 args at callBase+1, callBase+2.
+    // Vars overlap with call area; allocate extra temps if numVars < 3.
+    const numVars = stmt.names.length;
+    const callBase = this.allocReg(func); // varRegs[0] / call callee
+    const varRegs: number[] = [callBase];
+    for (let i = 1; i < numVars; i++) {
+      varRegs.push(this.allocReg(func, stmt.names[i]));
     }
+    // Ensure call args (state, control) have registers at callBase+1, callBase+2
+    const callArgsNeeded = 2;
+    const existingCallArea = Math.max(numVars, 1); // callBase already allocated
+    for (let i = existingCallArea; i < callArgsNeeded + 1; i++) {
+      this.allocReg(func); // temp registers for call args beyond varRegs
+    }
+    // Register the first loop var name if it wasn't registered (callBase was
+    // allocated without a name above to avoid cluttering the Local map before
+    // the full layout is known — fix it now).
+    func.scope.locals.set(stmt.names[0]!, callBase);
 
     const loopStart = func.proto.instructions.length;
     func.loopStack.push({ loopStart, breakPatches: [] });
 
-    // Call iterator: R[varRegs[0]], R[varRegs[1]], ... = iter(state, ctrl)
-    // Use CALL_RET_N: call R[iterReg] with args R[stateReg], R[ctrlReg], results to R[varRegs[0]..]
-    const numResults = varRegs.length;
-    const numArgs = 2; // state + control
-    this.emitOp(func, Op.CALL_RET_N, iterReg, numArgs, numResults, 0, 0);
+    // Each iteration: MOVE iterator/state/ctrl into call positions, then call.
+    this.emitOp(func, Op.MOVE, callBase, iterReg, 0, 0, 0);     // callee
+    this.emitOp(func, Op.MOVE, callBase + 1, stateReg, 0, 0, 0); // state arg
+    this.emitOp(func, Op.MOVE, callBase + 2, ctrlReg, 0, 0, 0);  // control arg
+    // CALL_RET_N(callBase, 2, numVars) → results in callBase..callBase+numVars-1
+    this.emitOp(func, Op.CALL_RET_N, callBase, 2, numVars, 0, 0);
 
-    // Test first variable: if nil, exit loop
-    this.emitJump(func, Op.TEST_FALSE, varRegs[0]!, 0);
+    // Test first variable: if nil/false, exit loop. Save the index so we can
+    // patch the jump target to the loop exit below (emitJump leaves C=0).
+    const exitTestIdx = this.emitJump(func, Op.TEST_FALSE, callBase, 0);
+
+    // Update control variable for next iteration: ctrl = first loop var
+    this.emitOp(func, Op.MOVE, ctrlReg, callBase, 0, 0, 0);
 
     // Loop body
     this.compileBlock(func, stmt.block);
 
-    // JUMP back to iterator call
+    // JUMP back to the MOVE + call sequence
     this.emitJump(func, Op.JUMP, 0, loopStart - func.proto.instructions.length);
 
-    // Patch all breaks
+    // Patch exit test + all breaks to jump here (past the loop)
     const top = func.loopStack.pop()!;
     const exitPos = func.proto.instructions.length;
+    func.proto.instructions[exitTestIdx]!.C = exitPos - exitTestIdx;
     for (const breakIdx of top.breakPatches) {
       func.proto.instructions[breakIdx]!.C = exitPos - breakIdx;
     }
 
-    // Free registers
-    for (let i = varRegs.length - 1; i >= 0; i--) {
-      this.freeReg(func, varRegs[i]!);
-    }
+    // Free registers (call area + iter state)
+    const totalCallArea = Math.max(numVars, 3); // callee + 2 args
+    func.scope.nextReg = callBase;
     this.freeReg(func, ctrlReg);
     this.freeReg(func, stateReg);
     this.freeReg(func, iterReg);
+    void totalCallArea;
   }
 
   // ---- Function declaration ----
@@ -580,6 +673,15 @@ class Compiler {
   private compileFunctionDecl(func: CompilerFunc, stmt: Node): void {
     if (stmt.t !== "Function" || !("name" in stmt) || !stmt.name) return;
     const params = stmt.params.filter(p => p !== "...");
+
+    // For `local function name(...)`, pre-declare the local BEFORE compiling
+    // the body so recursive self-references resolve to an upvalue (captured
+    // from this register) rather than a global. Standard Lua semantics.
+    let preDeclaredReg: number | null = null;
+    if (stmt.isLocal && stmt.name.parts.length === 1 && !stmt.name.method) {
+      preDeclaredReg = this.allocReg(func, stmt.name.parts[0]!);
+    }
+
     const subFunc = this.newFunc(func, params.length, stmt.params.includes("..."));
     for (let i = 0; i < params.length; i++) {
       subFunc.scope.locals.set(params[i]!, i);
@@ -596,17 +698,22 @@ class Compiler {
     // Assign to local or global
     if (stmt.name.parts.length === 1 && !stmt.name.method) {
       const name = stmt.name.parts[0]!;
-      const localReg = this.getLocal(func, name);
-      if (localReg !== null) {
-        // CLOSURE_SIMPLE: R[localReg] = createClosure(prototype[subIdx], nil, env)
-        this.emitOp(func, Op.CLOSURE_SIMPLE, localReg, subIdx, 0, 0, 0);
+      if (preDeclaredReg !== null) {
+        // `local function name(...)` — bind closure into the pre-declared local.
+        this.emitOp(func, Op.CLOSURE_SIMPLE, preDeclaredReg, subIdx, 0, 0, 0);
       } else {
-        // Global function: create closure and store in global
-        const tempReg = this.allocReg(func);
-        this.emitOp(func, Op.CLOSURE_SIMPLE, tempReg, subIdx, 0, 0, 0);
-        const constIdx = this.addConst(func, { type: "string", value: name });
-        this.emitOp(func, Op.SETGLOBAL, tempReg, constIdx, 0, 0, 0);
-        this.freeReg(func, tempReg);
+        const localReg = this.getLocal(func, name);
+        if (localReg !== null) {
+          // Pre-existing local: reassign the closure into it.
+          this.emitOp(func, Op.CLOSURE_SIMPLE, localReg, subIdx, 0, 0, 0);
+        } else {
+          // Global function: create closure and store in global
+          const tempReg = this.allocReg(func);
+          this.emitOp(func, Op.CLOSURE_SIMPLE, tempReg, subIdx, 0, 0, 0);
+          const constIdx = this.addConst(func, { type: "string", value: name });
+          this.emitOp(func, Op.SETGLOBAL, tempReg, constIdx, 0, 0, 0);
+          this.freeReg(func, tempReg);
+        }
       }
     }
     // TODO: handle dotted names (obj.method = function ...)
@@ -695,15 +802,20 @@ class Compiler {
         break;
       }
       case "Ident": {
-        const reg = this.getLocal(func, expr.name);
-        if (reg !== null) {
-          this.emitOp(func, Op.MOVE, destReg, reg, 0, 0, 0);
+        // Current-scope local → MOVE
+        const localReg = func.scope.locals.get(expr.name);
+        if (localReg !== undefined) {
+          this.emitOp(func, Op.MOVE, destReg, localReg, 0, 0, 0);
         } else {
-          // Global access: GETGLOBAL via GETUPVAL + LOADK pattern
-          // In our VM, globals are accessed via the env table (bi in reference).
-          // We store global names as string constants and use GETUPVAL-like access.
-          const constIdx = this.addConst(func, { type: "string", value: expr.name });
-          this.emitOp(func, Op.GETUPVAL, destReg, constIdx, 0, 0, 0);
+          // Enclosing-scope local → upvalue capture
+          const upvalIdx = this.resolveUpvalue(func, expr.name);
+          if (upvalIdx !== null) {
+            this.emitOp(func, Op.GETUPVAL_REAL, destReg, upvalIdx, 0, 0, 0);
+          } else {
+            // Global access via the env table (GETUPVAL with name constant)
+            const constIdx = this.addConst(func, { type: "string", value: expr.name });
+            this.emitOp(func, Op.GETUPVAL, destReg, constIdx, 0, 0, 0);
+          }
         }
         break;
       }
@@ -738,22 +850,24 @@ class Compiler {
       }
       case "Index": {
         const objReg = this.allocReg(func);
-        const idxReg = this.allocReg(func);
         this.compileExpr(func, expr.obj, objReg);
-        this.compileExpr(func, expr.index, idxReg);
-        // GETFIELD with register index — use CALL_RET_N or a GETTABLE op
-        // For string keys, we use GETFIELD_K2 (constant key access)
         if (expr.index.t === "String") {
+          // Constant string key → GETFIELD_K2
           const constIdx = this.addConst(func, { type: "string", value: expr.index.value });
           this.emitOp(func, Op.GETFIELD_K2, destReg, objReg, constIdx, 0, 0);
+        } else if (expr.index.t === "Number") {
+          // Numeric index — store as constant and use GETTABLE_RR via a register
+          const idxReg = this.allocReg(func);
+          this.compileExpr(func, expr.index, idxReg);
+          this.emitOp(func, Op.GETTABLE_RR, destReg, objReg, idxReg, 0, 0);
+          this.freeReg(func, idxReg);
         } else {
-          // Dynamic index: emit as rawset-like call or a specialized op
-          // For now, we handle this via a table access pattern
-          // TODO: implement GETTABLE_RR opcode
-          // Fall back to constant-based access with a temp
-          this.emitOp(func, Op.GETFIELD_K2, destReg, objReg, idxReg, 0, 0);
+          // Dynamic register index → GETTABLE_RR
+          const idxReg = this.allocReg(func);
+          this.compileExpr(func, expr.index, idxReg);
+          this.emitOp(func, Op.GETTABLE_RR, destReg, objReg, idxReg, 0, 0);
+          this.freeReg(func, idxReg);
         }
-        this.freeReg(func, idxReg);
         this.freeReg(func, objReg);
         break;
       }
@@ -815,6 +929,19 @@ class Compiler {
 
   private compileBinop(func: CompilerFunc, expr: Node, destReg: number): void {
     if (expr.t !== "Binop") return;
+    // Concat needs its operands in CONSECUTIVE registers (R[base], R[base+1])
+    // because CONCAT reads a range R[B]..R[D]. Handle before the general
+    // lhsReg/rhsReg alloc so we control register layout.
+    if (expr.op === "..") {
+      const baseReg = this.allocReg(func);
+      this.compileExpr(func, expr.lhs, baseReg);
+      const rhsSlot = baseReg + 1;
+      func.scope.nextReg = Math.max(func.scope.nextReg, rhsSlot + 1);
+      this.compileExpr(func, expr.rhs, rhsSlot);
+      this.emitOp(func, Op.CONCAT, destReg, baseReg, 2, rhsSlot, 0);
+      this.freeReg(func, baseReg);
+      return;
+    }
     const lhsReg = this.allocReg(func);
     const rhsReg = this.allocReg(func);
     this.compileExpr(func, expr.lhs, lhsReg);
@@ -838,75 +965,38 @@ class Compiler {
         this.emitOp(func, Op.MOD_RR, destReg, lhsReg, rhsReg, 0, 0);
         break;
       case "^":
-        // Power not in base opcodes — emit as placeholder; runtime handles via math.pow
-        this.emitOp(func, Op.MUL_RR, destReg, lhsReg, rhsReg, 0, 0);
+        // v0.4: proper power operator
+        this.emitOp(func, Op.POW_RR, destReg, lhsReg, rhsReg, 0, 0);
         break;
       case "==": {
-        // A == B: subtract and test zero
-        const eqSubReg = this.allocReg(func);
-        this.emitOp(func, Op.SUB_RR, eqSubReg, lhsReg, rhsReg, 0, 0);
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE
-        const eqTestIdx = this.emitJump(func, Op.TEST_FALSE, eqSubReg, 0);
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
-        func.proto.instructions[eqTestIdx]!.C = func.proto.instructions.length - eqTestIdx;
-        this.freeReg(func, eqSubReg);
+        // v0.4: direct equality (works for any type, not just numbers)
+        this.emitOp(func, Op.EQ_RR, destReg, lhsReg, rhsReg, 0, 0);
         break;
       }
       case "~=": {
-        // A ~= B: invert == logic
-        const subReg = this.allocReg(func);
-        this.emitOp(func, Op.SUB_RR, subReg, lhsReg, rhsReg, 0, 0);
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
-        const neqTestIdx = this.emitJump(func, Op.TEST_FALSE, subReg, 0);
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE
-        func.proto.instructions[neqTestIdx]!.C = func.proto.instructions.length - neqTestIdx;
-        this.freeReg(func, subReg);
+        this.emitOp(func, Op.NEQ_RR, destReg, lhsReg, rhsReg, 0, 0);
         break;
       }
       case "<": {
-        // A < B: use TEST_LT_RR (A is R[lhsReg], B is R[rhsReg])
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE first
-        const ltTestIdx = this.emitJump(func, Op.TEST_LT_RR, lhsReg, 0);
-        // If TEST_LT branches to pc+1, we fall through to set FALSE
-        // But TEST_LT as defined: if R[A] < R[B] then pc++ else pc += C
-        // We need to adjust B operand. B = rhsReg
-        const ltInsn = func.proto.instructions[ltTestIdx]!;
-        ltInsn.B = rhsReg;
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
-        func.proto.instructions[ltTestIdx]!.C = func.proto.instructions.length - ltTestIdx;
+        // A < B
+        this.emitOp(func, Op.LT_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
         break;
       }
       case ">": {
-        // A > B  equivalent to  B < A
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE
-        const gtTestIdx = this.emitJump(func, Op.TEST_LT_RR, rhsReg, 0);
-        const gtInsn = func.proto.instructions[gtTestIdx]!;
-        gtInsn.B = lhsReg;
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
-        func.proto.instructions[gtTestIdx]!.C = func.proto.instructions.length - gtTestIdx;
+        // A > B
+        this.emitOp(func, Op.GT_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
         break;
       }
       case "<=": {
-        // A <= B  ==  !(B < A)  reversed
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE
-        const leTestIdx = this.emitJump(func, Op.TEST_LT_RR, rhsReg, 0);
-        const leInsn = func.proto.instructions[leTestIdx]!;
-        leInsn.B = lhsReg;
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
-        func.proto.instructions[leTestIdx]!.C = func.proto.instructions.length - leTestIdx;
+        // A <= B
+        this.emitOp(func, Op.LE_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
         break;
       }
       case ">=": {
-        // A >= B  ==  !(A < B)
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE
-        const geTestIdx = this.emitJump(func, Op.TEST_LT_RR, lhsReg, 0);
-        const geInsn = func.proto.instructions[geTestIdx]!;
-        geInsn.B = rhsReg;
-        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
-        func.proto.instructions[geTestIdx]!.C = func.proto.instructions.length - geTestIdx;
+        // A >= B
+        this.emitOp(func, Op.GE_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
         break;
       }
-        break;
       case "and":
         // A and B: if A is falsy, result = A, else result = B
         this.emitOp(func, Op.MOVE, destReg, lhsReg, 0, 0, 0);
@@ -1029,11 +1119,12 @@ class Compiler {
   // ---- Table constructor ----
   private compileTable(func: CompilerFunc, expr: Node, destReg: number): void {
     if (expr.t !== "Table") return;
-    // Set destReg = {} via LOADBOOL false as nil (VM interprets as empty table)
-    this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0);
+    // Emit a NEWTABLE-like op: we reuse LOADBOOL with C=2 as a sentinel meaning
+    // "R[A] = {}" (empty table). The runtime treats LOADBOOL C=2 specially.
+    this.emitOp(func, Op.LOADBOOL, destReg, 0, 2, 0, 0);
 
+    let arrayIdx = 1; // Lua tables are 1-indexed
     for (const f of expr.fields) {
-      // Get constant index for key if provided
       if (f.key) {
         // R[destReg][K[key]] = R[value]
         if (f.key.t === "String") {
@@ -1052,13 +1143,13 @@ class Compiler {
           this.freeReg(func, keyReg);
         }
       } else {
-        // Array-like entry: value only, stored at sequential integer keys
-        // We just store the value directly — runtime handles array part
+        // Array-like entry: store at sequential integer keys (1, 2, 3, ...)
         const valReg = this.allocReg(func);
         this.compileExpr(func, f.value, valReg);
-        const keyIdx = this.addConst(func, { type: "number", value: 0 });
+        const keyIdx = this.addConst(func, { type: "number", value: arrayIdx });
         this.emitOp(func, Op.SETTABLE, destReg, keyIdx, valReg, 0, 0);
         this.freeReg(func, valReg);
+        arrayIdx++;
       }
     }
   }

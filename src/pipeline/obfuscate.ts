@@ -12,7 +12,7 @@ import { renameIdentifiers } from "../transforms/identifier.js";
 import { mulberry32, randInt } from "../util/prng.js";
 import { flattenAST } from "../ir/flatten.js";
 import { injectDeadcode } from "../transforms/deadcode.js";
-import { compileVM } from "../vm/pipeline.js";
+import { compileVM, compileVMWithRuntime } from "../vm/pipeline.js";
 
 export interface ObfuscateOptions {
   seed?: number;
@@ -30,6 +30,8 @@ export interface ObfuscateOptions {
   minify?: boolean;
   /** Enable VM bytecode mode (AST → bytecode → LZW+XOR → hex). */
   vm?: boolean;
+  /** Wrap VM bytecode in Luau runtime template → executable script (v0.4). */
+  runtime?: boolean;
 }
 
 export interface ObfuscateResult {
@@ -70,6 +72,25 @@ export function runPipeline(src: string, opts: ObfuscateOptions = {}): Obfuscate
 
   // If VM mode requested, branch here: compile to bytecode, skip D2/D3/D4/emit
   if (opts.vm) {
+    if (opts.runtime) {
+      // v0.4: wrap bytecode in Luau runtime template → executable script
+      const runtimeSrc = compileVMWithRuntime(ast, seed);
+      // Self-obfuscate the runtime template through the D1-D5 pipeline.
+      // The recursive call must NOT set vm/runtime (no infinite loop).
+      // A derived seed keeps the template's obfuscation independent of the
+      // bytecode's compilation (which already consumed `seed` for aliases).
+      const selfSeed = (seed ^ 0x5E1FA0) >>> 0;
+      const selfResult = runPipeline(runtimeSrc, {
+        seed: selfSeed,
+        noRename: opts.noRename,
+        noNumbers: opts.noNumbers,
+        noStrings: opts.noStrings,
+        noFlatten: opts.noFlatten,
+        noDeadcode: opts.noDeadcode,
+        minify: opts.minify,
+      });
+      return { out: selfResult.out, cipher: selfResult.cipher, nameMap: renameMap };
+    }
     const vmResult = compileVM(ast, seed);
     return { out: vmResult.hex, cipher, nameMap: renameMap, vmHex: vmResult.hex };
   }
@@ -87,47 +108,51 @@ export function runPipeline(src: string, opts: ObfuscateOptions = {}): Obfuscate
   }
 
   // 4. Number obfuscation: walk AST, attach __obf meta on Number nodes
-  ast = walk(ast, (n) => {
-    if (n.t === "Number") {
-      // @ts-expect-error meta channel
-      if (!n.__obf) {
-        const val = Number(n.value);
-        if (Number.isFinite(val)) {
-          const rng = mulberry32(seed ^ 0x9e3779b9);
-          const k = (randInt(rng, 0x7fffffff) | 1) >>> 0;
-          // @ts-expect-error
-          n.__obf = { kind: "bitxor", key: k, n: val };
+  if (!opts.noNumbers) {
+    ast = walk(ast, (n) => {
+      if (n.t === "Number") {
+        // @ts-expect-error meta channel
+        if (!n.__obf) {
+          const val = Number(n.value);
+          if (Number.isFinite(val)) {
+            const rng = mulberry32(seed ^ 0x9e3779b9);
+            const k = (randInt(rng, 0x7fffffff) | 1) >>> 0;
+            // @ts-expect-error
+            n.__obf = { kind: "bitxor", key: k, n: val };
+          }
         }
       }
-    }
-    return n;
-  });
+      return n;
+    });
+  }
 
   // 5. String encryption: walk AST, replace String nodes with __STR__ placeholders
   //    and accumulate into cipher.pool.
-  ast = walk(ast, (n) => {
-    if (n.t === "String" && n.value.length > 0) {
-      // Skip identifiers / keys that are very short - many engines treat them
-      // as lookups and short strings hurt decode perf without hiding much.
-      const rng = mulberry32(seed ^ 0x12345678 ^ n.value.length);
-      const skip = n.value.length <= 1 || (n.value.length <= 2 && rng() < 0.6);
-      if (skip) return n;
-      // @ts-expect-error - meta channel
-      if (n.__str_hex) return n;
-      const keyBytes = Buffer.from(cipher.masterKeyHex, "hex");
-      const buf = Buffer.from(n.value, "utf8");
-      for (let i = 0; i < buf.length; i++) {
-        buf[i] = (buf[i] ^ (keyBytes[(i + 1) % 4] + i)) & 0xff;
+  if (!opts.noStrings) {
+    ast = walk(ast, (n) => {
+      if (n.t === "String" && n.value.length > 0) {
+        // Skip identifiers / keys that are very short - many engines treat them
+        // as lookups and short strings hurt decode perf without hiding much.
+        const rng = mulberry32(seed ^ 0x12345678 ^ n.value.length);
+        const skip = n.value.length <= 1 || (n.value.length <= 2 && rng() < 0.6);
+        if (skip) return n;
+        // @ts-expect-error - meta channel
+        if (n.__str_hex) return n;
+        const keyBytes = Buffer.from(cipher.masterKeyHex, "hex");
+        const buf = Buffer.from(n.value, "utf8");
+        for (let i = 0; i < buf.length; i++) {
+          buf[i] = (buf[i] ^ (keyBytes[(i + 1) % 4] + i)) & 0xff;
+        }
+        const blob = buf.toString("hex").toUpperCase();
+        cipher.pool.push({ id: cipher.pool.length, hex: blob });
+        // @ts-expect-error
+        n.__str_hex = blob;
+        // @ts-expect-error
+        n.__str_id = cipher.pool.length - 1;
       }
-      const blob = buf.toString("hex").toUpperCase();
-      cipher.pool.push({ id: cipher.pool.length, hex: blob });
-      // @ts-expect-error
-      n.__str_hex = blob;
-      // @ts-expect-error
-      n.__str_id = cipher.pool.length - 1;
-    }
-    return n;
-  });
+      return n;
+    });
+  }
 
   // 6. Emit
   let out = emit(ast, cipher);

@@ -73,6 +73,24 @@ export enum Op {
   // --- Loops ---
   FORPREP = "FORPREP",      // R[A] = R[A] - R[A+2]; pc += C  (numeric for prep)
   FORLOOP = "FORLOOP",      // R[A] = R[A] - R[A+2]; if cond then pc += C; R[A+3] = R[A]
+  // --- Direct comparison (register-set) — v0.4 ---
+  // These set R[A] = (R[B] op R[C]) directly, avoiding the SUB_RR+TEST
+  // hack that breaks for non-numeric operands (e.g. string equality).
+  EQ_RR = "EQ_RR",          // R[A] = (R[B] == R[C])
+  NEQ_RR = "NEQ_RR",        // R[A] = (R[B] ~= R[C])
+  LT_RR_SET = "LT_RR_SET",  // R[A] = (R[B] <  R[C])
+  LE_RR_SET = "LE_RR_SET",  // R[A] = (R[B] <= R[C])
+  GT_RR_SET = "GT_RR_SET",  // R[A] = (R[B] >  R[C])
+  GE_RR_SET = "GE_RR_SET",  // R[A] = (R[B] >= R[C])
+  // --- Power operator — v0.4 ---
+  POW_RR = "POW_RR",        // R[A] = R[B] ^ R[C]
+  // --- Table get with register index — v0.4 ---
+  GETTABLE_RR = "GETTABLE_RR", // R[A] = R[B][R[C]]
+  // --- Table set with register index — v0.4 ---
+  SETTABLE_RR = "SETTABLE_RR", // R[A][R[B]] = R[C]
+  // --- Real upvalue access — v0.4 (closures capturing parent locals) ---
+  GETUPVAL_REAL = "GETUPVAL_REAL", // R[A] = upvals[B]
+  SETUPVAL_REAL = "SETUPVAL_REAL", // upvals[B] = R[A]
   // --- Fused compound ops ---
   // These execute multi-instruction sequences in a single dispatch case.
   // They are the hardest to analyze but provide the most compression.
@@ -162,7 +180,21 @@ export const OP_ALIASES: Record<number, Op> = {
    68: Op.RETURN0,                  // same as 55
    69: Op.SETTABLE,                 // new: table field store
    70: Op.TEST_LT_RR,               // new: reg < reg
-   71: Op.TEST_LE_RR,               // new: reg <= reg
+  71: Op.TEST_LE_RR,               // new: reg <= reg
+  // ---- v0.4 additions: direct comparison (register-set) + pow + gettable_rr ----
+  72: Op.EQ_RR,                    // R[A] = (R[B] == R[C])
+  73: Op.NEQ_RR,                   // R[A] = (R[B] ~= R[C])
+  74: Op.LT_RR_SET,                // R[A] = (R[B] <  R[C])
+  75: Op.LE_RR_SET,                // R[A] = (R[B] <= R[C])
+  76: Op.GT_RR_SET,                // R[A] = (R[B] >  R[C])
+  77: Op.GE_RR_SET,                // R[A] = (R[B] >= R[C])
+  78: Op.POW_RR,                   // R[A] = R[B] ^ R[C]
+  79: Op.GETTABLE_RR,              // R[A] = R[B][R[C]]
+  80: Op.EQ_RR,                    // alias for EQ_RR
+  81: Op.SETTABLE_RR,              // R[A][R[B]] = R[C]
+  // ---- v0.4: real upvalue access (closures capturing parent locals) ----
+  82: Op.GETUPVAL_REAL,           // R[A] = upvals[B]  (true upvalue by index)
+  83: Op.SETUPVAL_REAL,           // upvals[B] = R[A]
   };
 
 // Reverse map: Op → list of alias numbers
