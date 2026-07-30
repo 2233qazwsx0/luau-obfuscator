@@ -1,6 +1,6 @@
 {
   "name": "luau-obfuscator",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "High-strength Luau obfuscator + decryptor. Mirrors the bytecode-VM / LZW+XOR / bitxor / dispatch-table style of the reference script '猫猫脚本 114514'.",
   "type": "module",
   "engines": {
