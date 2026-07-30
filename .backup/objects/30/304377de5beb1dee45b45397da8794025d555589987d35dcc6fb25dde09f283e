@@ -1,0 +1,172 @@
+// src/transforms/identifier.ts — D1: identifier renaming.
+//
+// Strategy:
+//   - Walk the source via the existing lexer's token stream (we re-lex here
+//     instead of depending on a separate parser to keep this layer standalone).
+//   - Replace every non-reserved IDENT with `a0`, `a1`, ... `a9`, `b0`, ...
+//     matching the format the reference script uses for *local* names.
+//   - Upvalues / closures get a 2-letter scheme to mirror sample style.
+//   - Globally-used reserved words (`print`, `pairs`, `game`, ... ) are NOT
+//     renamed — we leave the engine's interface unchanged.
+
+import { TokenKind, type Token } from "../parser/tokens.js";
+
+const RESERVED_LUA: Set<string> = new Set([
+  "and", "break", "do", "else", "elseif", "end", "false", "for", "function",
+  "goto", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then",
+  "true", "until", "while", "continue", "type", "typeof", "export",
+]);
+
+// Common Roblox/Luau globals we deliberately do NOT rename (engine visibility).
+const KNOWN_GLOBALS: Set<string> = new Set([
+  "print", "warn", "error", "assert", "type", "tostring", "tonumber",
+  "pairs", "ipairs", "next", "select", "pcall", "xpcall", "setmetatable",
+  "getmetatable", "rawget", "rawset", "rawequal", "rawlen", "setfenv", "getfenv",
+  "unpack", "loadstring", "load", "require", "tick", "time", "wait",
+  "game", "workspace", "script", "math", "string", "table", "os", "task",
+  "Instance", "UDim", "UDim2", "Vector3", "Color3", "Enum", "ColorSequence",
+  "NumberSequence", "TweenInfo", "Rect", "Region3", "Ray", "CFrame",
+]);
+
+const SINGLE: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+/** Generate a stable mapping for a given seed. */
+function buildMapping(_seed: number, names: string[]): Map<string, string> {
+  const map = new Map<string, string>();
+  let idx = 0;
+  for (const name of names) {
+    if (RESERVED_LUA.has(name) || KNOWN_GLOBALS.has(name)) continue;
+    if (name.startsWith("__") && name.endsWith("__")) continue;
+    // form: a, b, ..., z, aa, ab, ...  aA, aB...
+    const head = idx < 26 ? SINGLE[idx] : SINGLE[Math.floor(idx / 53) % 53];
+    const tail = idx < 53 ? "" : SINGLE[idx % 53] ?? "";
+    const renamed = tail ? head + tail : head;
+    map.set(name, renamed);
+    idx++;
+  }
+  return map;
+}
+
+/** Heuristic: which identifier names appear to be local-declared?
+ *  Simple non-scoping collector — it just scans for `local NAME`, `function NAME`,
+ *  `local function NAME`, `for NAME`, and anonymous `function(` params.
+ *  If two declarations share a name (which Lua's lexical scoping allows but
+ *  usually avoids), we keep the original to avoid collisions.
+ */
+function collectCandidateIdents(tokens: Token[]): Set<string> {
+  const declared = new Set<string>();
+  const used = new Set<string>();
+  const functionParams = new Set<string>();
+  const localDeclCounts = new Map<string, number>();
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!;
+
+    // `local NAME[, NAME...]`  (with optional `function NAME` decl form)
+    if (t.kind === TokenKind.KEYWORD && t.value === "local") {
+      // local function NAME ...
+      if (tokens[i + 1] && tokens[i + 1]!.kind === TokenKind.KEYWORD && tokens[i + 1]!.value === "function") {
+        if (tokens[i + 2] && tokens[i + 2]!.kind === TokenKind.IDENT) {
+          const nm = tokens[i + 2]!.value;
+          localDeclCounts.set(nm, (localDeclCounts.get(nm) ?? 0) + 1);
+          declared.add(nm);
+        }
+        continue;
+      }
+      // local NAME[, NAME...]
+      let j = i + 1;
+      while (j < tokens.length) {
+        const t2 = tokens[j]!;
+        if (t2.kind === TokenKind.IDENT) {
+          const nm = t2.value;
+          localDeclCounts.set(nm, (localDeclCounts.get(nm) ?? 0) + 1);
+          declared.add(nm);
+          j++;
+        } else if (t2.kind === TokenKind.OP && t2.value === ",") {
+          j++;
+        } else break;
+      }
+      continue;
+    }
+
+    // `function NAME[.NAME...][:METHOD] (args) ... end`  statement form
+    if (t.kind === TokenKind.KEYWORD && t.value === "function") {
+      const next = tokens[i + 1];
+      if (next && next.kind === TokenKind.IDENT) {
+        // Walk dotted segments; the last is the function's own name.
+        let j = i + 1;
+        while (j < tokens.length && tokens[j]!.kind === TokenKind.IDENT) {
+          const nm = tokens[j]!.value;
+          localDeclCounts.set(nm, (localDeclCounts.get(nm) ?? 0) + 1);
+          declared.add(nm);
+          j++;
+          if (tokens[j] && tokens[j]!.kind === TokenKind.OP && tokens[j]!.value === ".") {
+            j++;
+          } else break;
+        }
+        continue;
+      }
+      // `function (args) ... end`  anonymous expression form
+      if (next && next.kind === TokenKind.OP && next.value === "(") {
+        let j = i + 2;
+        while (j < tokens.length && !(tokens[j]!.kind === TokenKind.OP && tokens[j]!.value === ")")) {
+          if (tokens[j]!.kind === TokenKind.IDENT) {
+            functionParams.add(tokens[j]!.value);
+          }
+          j++;
+        }
+        continue;
+      }
+    }
+
+    // `for NAME[, NAME...] [= ... | in ...] do ... end` or `for NAME = ... do`
+    if (t.kind === TokenKind.KEYWORD && t.value === "for") {
+      let j = i + 1;
+      while (j < tokens.length) {
+        const t2 = tokens[j]!;
+        if (t2.kind === TokenKind.IDENT) {
+          const nm = t2.value;
+          localDeclCounts.set(nm, (localDeclCounts.get(nm) ?? 0) + 1);
+          declared.add(nm);
+          j++;
+        } else if (t2.kind === TokenKind.OP && t2.value === ",") {
+          j++;
+        } else break;
+      }
+      continue;
+    }
+
+    // track usage
+    if (t.kind === TokenKind.IDENT) used.add(t.value);
+  // Filter out names that are declared more than once in the same file
+  // (different Lua scopes would still collide under our flat-rename scheme).
+  const safe = new Set<string>();
+  for (const n of declared) {
+    if ((localDeclCounts.get(n) ?? 0) === 1) safe.add(n);
+  }
+  // Function params aren't renamed by this pass (they live inside a single
+  // function and are easy to grep). Kept here for potential future use.
+  void functionParams;
+  const result = new Set([...safe].filter((n) => used.has(n)));
+  // eslint-disable-next-line no-console
+  console.error(`[debug] declared=${[...declared].join(',')} counts=${[...localDeclCounts.entries()].map(([k,v])=>k+'='+v).join(',')} used=${[...used].join(',')} result=${[...result].join(',')}`);
+  return result;
+}
+}
+
+/** Apply D1 to a token stream. Pure: returns new Token[] and a name map. */
+export function renameIdentifiers(tokens: Token[], seed: number): {
+  tokens: Token[];
+  map: Map<string, string>;
+} {
+  const candidates = collectCandidateIdents(tokens);
+  const names = [...candidates];
+  const map = buildMapping(seed, names);
+  const renamed = tokens.map((t) => {
+    if (t.kind === TokenKind.IDENT && map.has(t.value)) {
+      return { ...t, value: map.get(t.value)! };
+    }
+    return t;
+  });
+  return { tokens: renamed, map };
+}
