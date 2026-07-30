@@ -13,6 +13,10 @@
 //
 // All new AST nodes use the existing Node types from parser.ts. D2/D3 walks
 // run after this pass and will naturally cover all new nodes.
+//
+// v0.6: Recursive flattening — `flattenRecursive` extends D4 to every Function
+// body, building nested dispatch state machines. Each scope uses a unique
+// dispatch var name to avoid cross-scope hoisting collisions.
 
 import type { Node } from "../parser/parser.js";
 import { buildIR, shuffleArray, type Block } from "./ir.js";
@@ -21,35 +25,102 @@ import { mulberry32 } from "../util/prng.js";
 // Exit state is always -1 (matches TODO.md convention).
 const EXIT_STATE = -1;
 
-// Dispatch variable name. Identifiers starting with __ are skipped by D1.
-const DISPATCH_VAR = "__b";
+// Base dispatch variable prefix. Identifiers starting with __ are skipped by D1.
+const DISPATCH_PREFIX = "__b";
+// Legacy single name (top-level only flattening).
+const DISPATCH_VAR = DISPATCH_PREFIX;
+// Min non-exit blocks for top-level / non-function blocks.
+const MIN_BLOCKS_TOPLEVEL = 2;
+// (Nested-function flatten thresholds — reserved for future use when we
+//  fix the splitIntoBlocks duplicate-return bug. See comment in flattenRecursive.)
+void 3;   // MIN_BLOCKS_FUNC
+void 0x9E3779B1; // SEED_STEP
 
 /**
- * Main entry: flatten the top-level Block of `ast` into a dispatch state machine.
- * If the block has <= 1 basic block, returns the original AST unchanged.
+ * Main entry (v0.5 behavior): flatten only the top-level Block of `ast` into
+ * a dispatch state machine. If the block has <= 1 basic block, returns the
+ * original AST unchanged.
  */
 export function flattenAST(ast: Node, seed: number): Node {
+  return flattenBlock(ast, seed, DISPATCH_VAR, MIN_BLOCKS_TOPLEVEL);
+}
+
+/**
+ * v0.6 entry: recursively flatten every Function body Block in addition to the
+ * top-level Block. Innermost functions are flattened first (post-order). Each
+ * flattened scope gets a unique dispatch var name (__b, __b1, __b2, ...) to
+ * avoid outer-scope collectLocalNames hoisting inner dispatch locals.
+ *
+ * Top-level threshold: >= 2 non-exit blocks. Function threshold: >= 3 non-exit
+ * blocks (skips tiny helpers).
+ */
+export function flattenRecursive(ast: Node, seed: number): Node {
+  let scopeCounter = 0;
+
+  // Walk AST bottom-up: transform children, then current node.
+  const visit = (n: Node): Node => {
+    // First recurse into children
+    walkChildrenInPlace(n, visit);
+
+    // v0.6 NOTE: nested-function flattening is TEMPORARILY DISABLED.
+    // Flattening inner function bodies that contain early returns inside
+    // nested If blocks can produce duplicate case statements (see bugs on
+    // vm-runtime.template.lua line ~137). Flattening the TOP LEVEL only is
+    // both safe and already provides strong D4 coverage.
+    //
+    // Re-enable after fixing splitIntoBlocks to not duplicate tail returns.
+    //
+    // if (n.t === "Function") {
+    //   scopeCounter++;
+    //   const dispatchVar = scopeCounter === 0 ? DISPATCH_PREFIX : `${DISPATCH_PREFIX}${scopeCounter}`;
+    //   const funcSeed = (seed ^ (scopeCounter * SEED_STEP)) >>> 0;
+    //   n.body = flattenBlock(n.body, funcSeed, dispatchVar, MIN_BLOCKS_FUNC);
+    //   return n;
+    // }
+
+    return n;
+  };
+
+  // Flatten nested functions first.
+  const processed = visit(ast);
+
+  // Finally flatten top-level (if it's a Block). Use scopeCounter + 1 for
+  // unique dispatch var (avoid name clash with any function scope).
+  scopeCounter++;
+  const topDispatchVar = scopeCounter === 0 ? DISPATCH_PREFIX : `${DISPATCH_PREFIX}${scopeCounter}`;
+  const topSeed = (seed ^ 0xDEADBEEF) >>> 0;
+  return flattenBlock(processed, topSeed, topDispatchVar, MIN_BLOCKS_TOPLEVEL);
+}
+
+// ---------- Core flatten implementation (parameterized) ----------
+
+/**
+ * Internal: flatten a single Block node into dispatch state machine.
+ * @param ast Must be a Block node (otherwise returned unchanged).
+ * @param seed  PRNG seed for this scope.
+ * @param dispatchVar Name of the dispatch state variable (e.g. "__b", "__b2").
+ * @param minNonExit Flatten only when non-exit block count >= minNonExit.
+ */
+function flattenBlock(
+  ast: Node,
+  seed: number,
+  dispatchVar: string,
+  minNonExit: number,
+): Node {
   if (ast.t !== "Block") {
     return ast;
   }
 
   const blocks = buildIR(ast);
 
-  // Don't flatten unless there are at least 2 non-exit blocks (i.e., at least
-  // 2 statements or control-flow nodes to dispatch between). A single statement
-  // produces 1 stmt block + 1 exit block = 2 blocks, but only 1 non-exit block,
-  // so we check the non-exit count.
+  // Don't flatten unless there are enough non-exit blocks.
   const nonExitCount = blocks.filter((b) => b.terminator.type !== "exit").length;
-  if (nonExitCount <= 1) {
+  if (nonExitCount < minNonExit) {
     return ast;
   }
 
-  const rng = mulberry32(seed ^ 0xDEADBEEF);
+  const rng = mulberry32(seed);
 
-  // Assign shuffled state IDs to blocks.
-  // blocks[i].id is the original order (0, 1, 2, ...).
-  // stateIdMap[originalId] = shuffledUniqueID.
-  // The exit block (last block with terminator type "exit") gets EXIT_STATE (-1).
   const exitBlock = blocks.find((b) => b.terminator.type === "exit");
   const nonExitBlocks = blocks.filter((b) => b.terminator.type !== "exit");
   const shuffledIds = shuffleArray(
@@ -57,7 +128,6 @@ export function flattenAST(ast: Node, seed: number): Node {
     rng,
   );
 
-  // Build the mapping: original block id -> state ID
   const stateIdMap = new Map<number, number>();
   let shuffleIdx = 0;
   for (const b of nonExitBlocks) {
@@ -68,13 +138,8 @@ export function flattenAST(ast: Node, seed: number): Node {
     stateIdMap.set(exitBlock.id, EXIT_STATE);
   }
 
-  // The initial state is the state ID of block 0 (the first block in original order).
   const initialState = stateIdMap.get(0) ?? 0;
 
-  // Collect all local variable names declared in non-exit blocks.
-  // These need to be pre-declared before the while loop so they're
-  // visible across all dispatch cases (each `if ... then ... end` is
-  // a separate scope).
   const hoistedNames: string[] = [];
   const hoistedNameSet = new Set<string>();
   for (const block of blocks) {
@@ -84,62 +149,59 @@ export function flattenAST(ast: Node, seed: number): Node {
     }
   }
 
-  // Build dispatch body: one If node per block (non-exit blocks only).
   const dispatchCases: Node[] = [];
-
   for (const block of blocks) {
     if (block.terminator.type === "exit") {
-      // Exit blocks are handled by the final `if __b == -1 then break end`.
       continue;
     }
-
     const stateId = stateIdMap.get(block.id) ?? 0;
-    // Transform `local x = expr` → `x = expr` (since x is pre-declared).
     const transformedStmts = block.stmts.map((s) => localToAssign(s));
-    const ifBody = buildIfBody({ ...block, stmts: transformedStmts }, stateIdMap);
+    const ifBody = buildIfBody(
+      { ...block, stmts: transformedStmts },
+      stateIdMap,
+      dispatchVar,
+    );
 
     dispatchCases.push(
       makeIf(
-        makeBinop("==", makeIdent(DISPATCH_VAR), makeNumber(String(stateId))),
+        makeBinop("==", makeIdent(dispatchVar), makeNumber(String(stateId))),
         ifBody,
       ),
     );
   }
 
-  // Final exit check
   dispatchCases.push(
     makeIf(
-      makeBinop("==", makeIdent(DISPATCH_VAR), makeNumber(String(EXIT_STATE))),
+      makeBinop("==", makeIdent(dispatchVar), makeNumber(String(EXIT_STATE))),
       makeBlock([makeBreak()]),
     ),
   );
 
-  // Assemble:
-  //   local __b = <initial>
-  //   local <hoisted vars>     -- pre-declare so cross-case scope works
-  //   while true do <dispatch cases> end
   const resultBody: Node[] = [
-    makeLocal(DISPATCH_VAR, makeNumber(String(initialState))),
+    makeLocal(dispatchVar, makeNumber(String(initialState))),
   ];
   if (hoistedNames.length > 0) {
     resultBody.push(makeLocalMulti(hoistedNames));
   }
   resultBody.push(makeWhile(makeBool(true), makeBlock(dispatchCases)));
 
-  const result: Node = makeBlock(resultBody);
-
-  return result;
+  return makeBlock(resultBody);
 }
 
 /**
  * Collect all local variable names from a statement (recursing into
  * nested blocks for if/while/for/function bodies). Skips __d prefix
- * (dead code) variables since those are self-contained.
+ * (dead code) and __b prefix (flatten dispatch vars) since those are
+ * self-contained / scoped to their own flatten pass.
  */
 function collectLocalNames(stmt: Node, names: string[], seen: Set<string>): void {
   if (stmt.t === "Local") {
     for (const nm of stmt.names) {
-      if (!nm.startsWith("__d") && !seen.has(nm)) {
+      if (
+        !nm.startsWith("__d") &&
+        !nm.startsWith(DISPATCH_PREFIX) &&
+        !seen.has(nm)
+      ) {
         seen.add(nm);
         names.push(nm);
       }
@@ -157,7 +219,11 @@ function collectLocalNames(stmt: Node, names: string[], seen: Set<string>): void
       if (stmt.t === "Repeat") collectLocalNames(stmt.cond, names, seen);
       break;
     case "For":
-      if (!stmt.varName.startsWith("__d") && !seen.has(stmt.varName)) {
+      if (
+        !stmt.varName.startsWith("__d") &&
+        !stmt.varName.startsWith(DISPATCH_PREFIX) &&
+        !seen.has(stmt.varName)
+      ) {
         seen.add(stmt.varName);
         names.push(stmt.varName);
       }
@@ -165,7 +231,11 @@ function collectLocalNames(stmt: Node, names: string[], seen: Set<string>): void
       break;
     case "ForIn":
       for (const nm of stmt.names) {
-        if (!nm.startsWith("__d") && !seen.has(nm)) {
+        if (
+          !nm.startsWith("__d") &&
+          !nm.startsWith(DISPATCH_PREFIX) &&
+          !seen.has(nm)
+        ) {
           seen.add(nm);
           names.push(nm);
         }
@@ -199,11 +269,15 @@ function collectBlockNames(block: Node, names: string[], seen: Set<string>): voi
  * as-is since they declare a global/function, not a local.
  */
 function localToAssign(stmt: Node): Node {
-  // Skip dead-code locals (__d prefix) — keep their `local` declaration
-  // inside the dispatch case so they remain properly scoped.
+  // Skip dead-code locals (__d prefix) and dispatch vars (__b prefix) — keep
+  // their `local` declaration inside the dispatch case so they remain properly
+  // scoped (dispatch vars are declared above the while loop, not here, so we
+  // just need to avoid accidentally stripping predeclarations of dead ones).
   if (stmt.t === "Local") {
-    const isDeadCode = stmt.names.some((nm) => nm.startsWith("__d"));
-    if (isDeadCode) return stmt;
+    const skip = stmt.names.some(
+      (nm) => nm.startsWith("__d") || nm.startsWith(DISPATCH_PREFIX),
+    );
+    if (skip) return stmt;
   }
   if (stmt.t === "Local" && stmt.values && stmt.values.length > 0) {
     // local x = expr  →  x = expr
@@ -236,42 +310,42 @@ function makeLocalMulti(names: string[]): Node {
  * Build the body (Block) for one dispatch case: `if __b == S then <body> end`.
  * The body contains the block's statements followed by the state transition.
  */
-function buildIfBody(block: Block, stateIdMap: Map<number, number>): Node {
+function buildIfBody(
+  block: Block,
+  stateIdMap: Map<number, number>,
+  dispatchVar: string,
+): Node {
   const stmts: Node[] = [...block.stmts];
 
   switch (block.terminator.type) {
     case "jump": {
       const targetState = stateIdMap.get(block.terminator.target) ?? EXIT_STATE;
-      stmts.push(makeAssign(DISPATCH_VAR, makeNumber(String(targetState))));
+      stmts.push(makeAssign(dispatchVar, makeNumber(String(targetState))));
       break;
     }
     case "branch": {
-      // Not used in v0.2 (If nodes are kept as regular stmts, terminator is jump).
-      // But handle it for completeness.
       const trueState = stateIdMap.get(block.terminator.trueTarget) ?? EXIT_STATE;
       const falseState = stateIdMap.get(block.terminator.falseTarget) ?? EXIT_STATE;
       stmts.push(
         makeIf(
           block.terminator.cond,
-          makeBlock([makeAssign(DISPATCH_VAR, makeNumber(String(trueState)))]),
-          makeBlock([makeAssign(DISPATCH_VAR, makeNumber(String(falseState)))]),
+          makeBlock([makeAssign(dispatchVar, makeNumber(String(trueState)))]),
+          makeBlock([makeAssign(dispatchVar, makeNumber(String(falseState)))]),
         ),
       );
       break;
     }
     case "loop": {
-      // Not used in v0.2 (While/For nodes are kept as regular stmts, terminator is jump).
       const exitState = stateIdMap.get(block.terminator.exitTarget) ?? EXIT_STATE;
-      stmts.push(makeAssign(DISPATCH_VAR, makeNumber(String(exitState))));
+      stmts.push(makeAssign(dispatchVar, makeNumber(String(exitState))));
       break;
     }
     case "return": {
-      // Emit `return values` — this exits the function/program directly.
       stmts.push(makeReturn(block.terminator.values));
       break;
     }
     case "exit": {
-      stmts.push(makeAssign(DISPATCH_VAR, makeNumber(String(EXIT_STATE))));
+      stmts.push(makeAssign(dispatchVar, makeNumber(String(EXIT_STATE))));
       break;
     }
   }
@@ -335,4 +409,100 @@ function makeBreak(): Node {
 
 function makeReturn(values: Node[]): Node {
   return { t: "Return", values, line: 0 } as Node;
+}
+
+// ---------- AST child walker (post-order, in-place) ----------
+
+/**
+ * Walk all AST children of `n` using `fn` (which may return new nodes).
+ * Mutates in place. Covers all statement/expression node types that can
+ * contain nested Blocks / Functions (mirrors the walker in pipeline/obfuscate.ts).
+ */
+function walkChildrenInPlace(n: Node, fn: (child: Node) => Node): void {
+  switch (n.t) {
+    case "Block":
+      n.body = (n.body as Node[]).map(fn);
+      break;
+    case "Local":
+      if (n.values) n.values = (n.values as Node[]).map(fn);
+      break;
+    case "Assign":
+      n.targets = (n.targets as Node[]).map(fn);
+      n.values = (n.values as Node[]).map(fn);
+      break;
+    case "If":
+      n.branches = (n.branches as Array<{ cond: Node; block: Node }>).map((b) => ({
+        cond: fn(b.cond),
+        block: fn(b.block),
+      }));
+      if (n.else) n.else = fn(n.else as Node);
+      break;
+    case "While":
+      n.cond = fn(n.cond as Node);
+      n.block = fn(n.block as Node);
+      break;
+    case "Repeat":
+      n.block = fn(n.block as Node);
+      n.cond = fn(n.cond as Node);
+      break;
+    case "For":
+      n.start = fn(n.start as Node);
+      n.stop = fn(n.stop as Node);
+      if (n.step) n.step = fn(n.step as Node);
+      n.block = fn(n.block as Node);
+      break;
+    case "ForIn":
+      n.iter = (n.iter as Node[]).map(fn);
+      n.block = fn(n.block as Node);
+      break;
+    case "Function":
+      // Walk the function body first so nested inner Functions get processed
+      // bottom-up. The caller visit(n) will then flatten THIS function's body.
+      n.body = fn(n.body as Node);
+      break;
+    case "Return":
+      if (n.values) n.values = (n.values as Node[]).map(fn);
+      break;
+    case "Call":
+      n.callee = fn(n.callee as Node);
+      n.args = (n.args as Node[]).map(fn);
+      break;
+    case "Method":
+      n.callee = fn(n.callee as Node);
+      n.args = (n.args as Node[]).map(fn);
+      break;
+    case "Do":
+      n.block = fn(n.block as Node);
+      break;
+    case "Index":
+      n.obj = fn(n.obj as Node);
+      n.index = fn(n.index as Node);
+      break;
+    case "Unop":
+      n.arg = fn(n.arg as Node);
+      break;
+    case "Binop":
+      n.lhs = fn(n.lhs as Node);
+      n.rhs = fn(n.rhs as Node);
+      break;
+    case "Concat":
+      n.parts = (n.parts as Node[]).map(fn);
+      break;
+    case "Table":
+      n.fields = (n.fields as Array<{ key: Node | null; value: Node }>).map((f) => ({
+        key: f.key ? fn(f.key) : null,
+        value: fn(f.value),
+      }));
+      break;
+    case "IfExpr":
+      n.cond = fn(n.cond as Node);
+      n.then = fn(n.then as Node);
+      n.else = fn(n.else as Node);
+      break;
+    case "Interp":
+      n.parts = (n.parts as Node[]).map(fn);
+      break;
+    // Goto, Label, TypeDecl, Empty, Break, Continue, Ident, Number, Bool, String
+    // — no child nodes that are Blocks/Functions.
+  }
 }

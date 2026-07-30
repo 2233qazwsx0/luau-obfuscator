@@ -23,19 +23,31 @@
 // The serialized function format (binary string) is:
 //   [numInstructions: uint32]
 //   for each instruction: [b8: uint32 LE][b9: uint32 LE]
+//     (b8/b9 are XOR-encrypted if insnSeed is set; see F4 below)
 //   [numConstants: uint32]
 //   for each constant: [typeTag: uint8][data...]
 //     type 0 (string): [len: uint8][bytes...]
+//       NOTE: strings with blindDesc[str_xor] are stored XOR'd
 //     type 1 (bool): [val: uint8]
 //     type 2 (number): [8 bytes IEEE 754 LE]
+//       NOTE: numbers with blindDesc[num_split] are stored as value + k2 (i.e. k1)
+//   [numBlindEntries: uint32]   -- v0.6 F3 (always = numConstants, can be 0 for compat)
+//   for each blind entry: [tag: uint8][params...]
+//     0 = none
+//     1 = num_split: [k2: 8 bytes IEEE 754 LE]
+//     2 = str_xor: [keyLen: uint8][keyBytes[0..keyLen-1]: uint8]
 //   [paramCount: uint8]
 //   [isVararg: uint8]
 //   [numSubFunctions: uint32]
 //   for each sub-function: [recursive serialization]
 //   [numUpvalues: uint8]
 //   for each upvalue: [fromStack: uint8][index: uint8]
+//   [vmId: uint8]
+//   [hasInsnSeed: uint8]       -- v0.6 F4 (0/1)
+//   if hasInsnSeed: [insnSeed: uint32 LE]
 //
 // All multi-byte integers are written little-endian to match the reference's aj().
+import { mulberry32 } from "../util/prng.js";
 // ---- Bit extraction helpers (mirror reference's a8 function) ----
 /** Extract bits [start, start+width-1] from a 32-bit integer (1-indexed, like reference). */
 export function extractBits(value, start, width) {
@@ -146,12 +158,30 @@ function writeString(buf, value) {
 }
 /**
  * Serialize a constant entry to the bytecode buffer.
+ * If `blind` is provided and applies to this entry, the stored value
+ * is blinded (F3): numbers become (value + k2) = k1, strings become XOR bytes.
  */
-function writeConstant(buf, entry) {
+function writeConstant(buf, entry, blind) {
     switch (entry.type) {
         case "string":
             writeU8(buf, 0);
-            writeString(buf, entry.value);
+            if (blind && blind.kind === "str_xor") {
+                // Write XOR-encoded bytes with same length
+                const key = blind.key;
+                const klen = key.length;
+                const s = entry.value;
+                const buf2 = [];
+                for (let i = 0; i < s.length; i++) {
+                    const code = s.charCodeAt(i) & 0xFF;
+                    buf2.push((code ^ (key[i % klen] & 0xFF)) & 0xFF);
+                }
+                writeU8(buf, s.length & 0xFF);
+                for (const b of buf2)
+                    buf.push(b);
+            }
+            else {
+                writeString(buf, entry.value);
+            }
             break;
         case "bool":
             writeU8(buf, 1);
@@ -159,7 +189,12 @@ function writeConstant(buf, entry) {
             break;
         case "number":
             writeU8(buf, 2);
-            writeF64(buf, entry.value);
+            if (blind && blind.kind === "num_split") {
+                writeF64(buf, entry.value + blind.k2); // stored = k1
+            }
+            else {
+                writeF64(buf, entry.value);
+            }
             break;
     }
 }
@@ -170,17 +205,55 @@ function writeConstant(buf, entry) {
  */
 export function serializeFunction(func) {
     const buf = [];
+    // ---- F4 pre-compute instruction XOR keystream ----
+    const numInsn = func.instructions.length;
+    let insnKeys = null;
+    if (func.insnSeed !== undefined) {
+        const rng = mulberry32(func.insnSeed >>> 0);
+        insnKeys = new Array(numInsn * 2);
+        for (let i = 0; i < numInsn * 2; i++)
+            insnKeys[i] = Math.floor(rng() * 0x100000000) >>> 0;
+    }
     // Instructions
-    writeU32(buf, func.instructions.length);
-    for (const insn of func.instructions) {
-        const [b8, b9] = encodeInstruction(insn);
+    writeU32(buf, numInsn);
+    for (let i = 0; i < numInsn; i++) {
+        const insn = func.instructions[i];
+        let [b8, b9] = encodeInstruction(insn);
+        if (insnKeys) {
+            b8 = ((b8 >>> 0) ^ insnKeys[i * 2]) >>> 0;
+            b9 = ((b9 >>> 0) ^ insnKeys[i * 2 + 1]) >>> 0;
+        }
         writeU32(buf, b8);
         writeU32(buf, b9);
     }
     // Constants
-    writeU32(buf, func.constants.length);
-    for (const c of func.constants) {
-        writeConstant(buf, c);
+    const numConst = func.constants.length;
+    writeU32(buf, numConst);
+    const descs = func.blindDescs;
+    for (let i = 0; i < numConst; i++) {
+        const c = func.constants[i];
+        const desc = descs ? (descs[i] ?? null) : null;
+        writeConstant(buf, c, desc);
+    }
+    // F3: blind descriptors (parallel array, always written for compat)
+    writeU32(buf, numConst);
+    for (let i = 0; i < numConst; i++) {
+        const desc = descs ? (descs[i] ?? null) : null;
+        if (!desc) {
+            writeU8(buf, 0);
+        }
+        else if (desc.kind === "num_split") {
+            writeU8(buf, 1);
+            writeF64(buf, desc.k2);
+        }
+        else {
+            // str_xor
+            writeU8(buf, 2);
+            const klen = desc.key.length & 0xFF;
+            writeU8(buf, klen);
+            for (let k = 0; k < klen; k++)
+                writeU8(buf, desc.key[k] & 0xFF);
+        }
     }
     // Param count
     writeU8(buf, func.paramCount);
@@ -202,8 +275,13 @@ export function serializeFunction(func) {
         writeU8(buf, uv.fromStack ? 1 : 0);
         writeU8(buf, uv.index);
     }
-    // v0.8 多 VM：函数默认 VM 编号（0/1/2）。undefined → 0（向后兼容）。
+    // v0.8 多 VM：函数默认 VM 编号（0/1/2 真VM，3/4 假VM，向后兼容 undefined=0）。
     writeU8(buf, (func.vmId ?? 0) & 0xFF);
+    // v0.6 F4: instruction XOR seed presence
+    const hasSeed = func.insnSeed !== undefined;
+    writeU8(buf, hasSeed ? 1 : 0);
+    if (hasSeed)
+        writeU32(buf, (func.insnSeed >>> 0));
     // Convert byte array to binary string
     return Buffer.from(buf).toString("binary");
 }
@@ -252,6 +330,16 @@ function readString(bytes, offset) {
 /**
  * Deserialize a function from a binary string.
  * Returns the FuncPrototype and the number of bytes consumed.
+ *
+ * Compatibility: the old (pre v0.6) format lacks blind descriptors and
+ * instruction-XOR seed.  We detect the v0.6 format by checking if the
+ * uint32 immediately after constants has a plausible value:
+ *   - old format: at that position we have paramCount (uint8, 0..254) + vararg (uint8, 0/1)
+ *     → first 32 bits read as u32 will be ≤ 0x000100FE (≈ 65790) and will equal numConsts
+ *   - v0.6 format: after constants we write exactly numConsts as uint32.
+ * So we check: the uint32-after-constants equals numConsts AND numConsts >= 1 → v0.6 format.
+ * Edge case: numConsts=0 → v0.6 always writes 0 u32 followed by numBlind=0 → same shape as old.
+ *            For numConsts=0, we peek further and use a heuristic.
  */
 export function deserializeFunction(data, offset = 0) {
     const bytes = Array.from(Buffer.from(data, "binary"), b => b);
@@ -259,11 +347,17 @@ export function deserializeFunction(data, offset = 0) {
     // Instructions
     let numInsns;
     [numInsns, pos] = readU32(bytes, pos);
+    // We might need to re-read instructions after insnSeed is known; for
+    // now keep them encoded+plaintext in a parallel buffer, we'll re-XOR at the end.
+    const encB8 = new Array(numInsns);
+    const encB9 = new Array(numInsns);
     const instructions = [];
     for (let i = 0; i < numInsns; i++) {
         let b8, b9;
         [b8, pos] = readU32(bytes, pos);
         [b9, pos] = readU32(bytes, pos);
+        encB8[i] = b8;
+        encB9[i] = b9;
         instructions.push(decodeInstruction(b8, b9));
     }
     // Constants
@@ -287,6 +381,83 @@ export function deserializeFunction(data, offset = 0) {
             let d;
             [d, pos] = readF64(bytes, pos);
             constants.push({ type: "number", value: d });
+        }
+    }
+    // Detect v0.6 format
+    const peekU32 = (p) => ((bytes[p] | (bytes[p + 1] << 8) | (bytes[p + 2] << 16) | (bytes[p + 3] << 24)) >>> 0);
+    let isV06 = false;
+    if (pos + 4 <= bytes.length) {
+        const nxt = peekU32(pos);
+        if (nxt === numConsts && numConsts >= 1)
+            isV06 = true;
+        if (numConsts === 0) {
+            // Heuristic: v0.6 writes 0x00000000 then later has (hasInsnSeed byte).
+            // Old format here writes (paramCount u8)(vararg u8)(numSubs u32)... very rarely
+            // would paramCount=0+vararg=0+numSubsLow=0 look exactly like 0 u32 twice.
+            // Safer: try to parse v0.6, if the remaining shape matches at end we use it.
+            if (peekU32(pos) === 0) {
+                // Tentatively mark v0.6; if later structure misaligns on end we might be wrong,
+                // but for our compiler output (always v0.6 new) this is correct.
+                isV06 = true;
+            }
+        }
+    }
+    let blindDescs = undefined;
+    if (isV06) {
+        // numBlindEntries
+        let nBlind;
+        [nBlind, pos] = readU32(bytes, pos);
+        const arr = new Array(nBlind);
+        for (let i = 0; i < nBlind; i++) {
+            let tag;
+            [tag, pos] = readU8(bytes, pos);
+            if (tag === 0) {
+                arr[i] = null;
+            }
+            else if (tag === 1) {
+                let k2;
+                [k2, pos] = readF64(bytes, pos);
+                arr[i] = { kind: "num_split", k2 };
+            }
+            else if (tag === 2) {
+                let klen;
+                [klen, pos] = readU8(bytes, pos);
+                const kArr = new Array(klen);
+                for (let k = 0; k < klen; k++) {
+                    let kb;
+                    [kb, pos] = readU8(bytes, pos);
+                    kArr[k] = kb;
+                }
+                arr[i] = { kind: "str_xor", key: kArr };
+            }
+            else {
+                arr[i] = null;
+            }
+        }
+        blindDescs = arr;
+        // Now un-blind constants in memory so tests & compiler see plaintext
+        // (this mirrors the runtime blind cache first-hit).
+        for (let i = 0; i < constants.length; i++) {
+            const bd = blindDescs[i];
+            if (!bd)
+                continue;
+            const c = constants[i];
+            if (bd.kind === "num_split" && c.type === "number") {
+                c.value = c.value - bd.k2;
+            }
+            else if (bd.kind === "str_xor" && c.type === "string") {
+                const key = bd.key;
+                const klen = key.length;
+                if (klen === 0)
+                    continue;
+                const raw = c.value;
+                let out = "";
+                for (let ch = 0; ch < raw.length; ch++) {
+                    const code = raw.charCodeAt(ch) & 0xFF;
+                    out += String.fromCharCode((code ^ (key[ch % klen] & 0xFF)) & 0xFF);
+                }
+                c.value = out;
+            }
         }
     }
     // Param count
@@ -321,6 +492,28 @@ export function deserializeFunction(data, offset = 0) {
     // v0.8 多 VM：函数默认 VM 编号。
     let vmId;
     [vmId, pos] = readU8(bytes, pos);
+    // v0.6 F4: instruction XOR seed
+    let insnSeed = undefined;
+    if (isV06 && pos + 1 <= bytes.length) {
+        let hasSeed;
+        [hasSeed, pos] = readU8(bytes, pos);
+        if (hasSeed !== 0) {
+            let sd;
+            [sd, pos] = readU32(bytes, pos);
+            insnSeed = sd;
+        }
+    }
+    // If F4 seed present, re-decode instructions with XOR keys applied.
+    if (insnSeed !== undefined) {
+        const rng = mulberry32(insnSeed >>> 0);
+        for (let i = 0; i < numInsns; i++) {
+            const k8 = Math.floor(rng() * 0x100000000) >>> 0;
+            const k9 = Math.floor(rng() * 0x100000000) >>> 0;
+            const b8 = ((encB8[i] >>> 0) ^ k8) >>> 0;
+            const b9 = ((encB9[i] >>> 0) ^ k9) >>> 0;
+            instructions[i] = decodeInstruction(b8, b9);
+        }
+    }
     return [{
             instructions,
             constants,
@@ -329,6 +522,8 @@ export function deserializeFunction(data, offset = 0) {
             isVararg: varargFlag !== 0,
             upvalues,
             vmId,
+            blindDescs,
+            insnSeed,
         }, pos - offset];
 }
 // ---- Instruction decoding (for tests / decrypt) ----

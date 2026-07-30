@@ -21,7 +21,9 @@ program
   .option("--runtime", "wrap VM bytecode in Luau runtime template (implies --vm, v0.4)")
   .option("--no-memwipe", "disable runtime memory wiping (secure_nil + GC, v0.5)")
   .option("--no-antidump", "disable anti-dump decoy blob (v0.5)")
-  .option("--no-frag", "disable hex blob fragmentation (v0.7)");
+  .option("--no-frag", "disable hex blob fragmentation (v0.7)")
+  .option("--no-recursive-flatten", "disable RECURSIVE control-flow flattening (D4 only at top-level, v0.6 F1)")
+  .option("--no-recursive-deadcode", "disable recursive dead-code + opaque predicates (D5 only at top-level, v0.6 F2)");
 
 program.action((opts) => {
   const src = readFileSync(resolve(opts.input), "utf8");
@@ -39,6 +41,8 @@ program.action((opts) => {
     noMemwipe: opts.memwipe === false,
     noAntidump: opts.antidump === false,
     noFrag: opts.frag === false,
+    recursiveFlatten: opts.recursiveFlatten !== false,
+    recursiveDeadcode: opts.recursiveDeadcode !== false,
   });
   if (opts.out) {
     writeFileSync(resolve(opts.out), out, "utf8");

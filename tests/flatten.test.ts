@@ -98,10 +98,13 @@ describe("flattenAST", () => {
 
 describe("flatten pipeline", () => {
   it("full pipeline", () => {
-    const src = 'local greeting = \"hello world\"\nprint(greeting)';
+    const src = 'local greeting = "hello world"\nprint(greeting)';
     const r = runPipeline(src, { seed: 42 });
     expect(r.out.length).toBeGreaterThan(0);
-    expect(r.out).toContain("while true do"); expect(r.out).toContain("__b ==");
+    expect(r.out).toContain("while true do");
+    // D4 dispatch var name is now scoped: __b, __b1, __b2, ... (see
+    // flattenRecursive in src/ir/flatten.ts). Accept any __b<N> == pattern.
+    expect(r.out).toMatch(/__b\d*\s*==/);
   });
   it("noFlatten disabled", () => {
     const src = 'print(\"a\")\nprint(\"b\")\nprint(\"c\")';

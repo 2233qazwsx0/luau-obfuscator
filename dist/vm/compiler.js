@@ -17,7 +17,7 @@
 // The compiler uses pickAlias() to randomly select among the 70 opcode
 // aliases, making each compilation produce different bytecode even for
 // the same input + same seed (seed determines alias selection).
-import { Op, buildSemToOpMap, OP_SWITCH_VM, OP_DEAD_VM, VM_COUNT, DEAD_VM_IDS, } from "./opcodes.js";
+import { Op, buildSemToOpMap, OP_SWITCH_VM, OP_DEAD_VM, VM_COUNT, REAL_VM_IDS, DEAD_VM_IDS, } from "./opcodes.js";
 import { ConstantPool } from "./constants.js";
 import { mulberry32 } from "../util/prng.js";
 // ---- Main compiler entry point ----
@@ -29,14 +29,23 @@ export function compileAST(ast, seed) {
 // ---- Compiler class ----
 class Compiler {
     rng;
+    seed;
     // v0.8 多 VM：sem→op 正向表，按 vmId 索引。每个 VM 下同一语义对应不同 op 号。
     // buildSemToOpMap 对多别名的语义随机选一个；这里固定下来贯穿整次编译，
     // 保证同一函数内同一语义始终用同一 op 号。映射由 seed 派生，运行时用同
     // 一个 seed 重建反查表 vm_maps，从而正确解释字节码。
+    // v0.6 F5：索引 0..REAL_VM_IDS.length-1 是真 VM；3..4 是假 VM（复用 1/2 的同结构表）。
     semToOpMaps;
+    // v0.6 F4：全局递增 proto 计数器，用作 insnSeed 派生源。
+    protoCounter;
+    // v0.6 F3 阈值
+    BLIND_STR_MIN = 8;
+    BLIND_NUM_MIN = 8;
     constructor(rng, seed) {
         this.rng = rng;
+        this.seed = seed >>> 0;
         this.semToOpMaps = [];
+        this.protoCounter = 0;
         for (let vm = 0; vm < VM_COUNT; vm++) {
             this.semToOpMaps.push(buildSemToOpMap(seed, vm, rng));
         }
@@ -61,8 +70,9 @@ class Compiler {
             parent: parent ? parent.scope : null,
         };
         // v0.8：每个函数随机分配一个默认 VM。运行时 vm_execute 以 proto.vmId 起步，
-        // 之后由字节码内的 SWITCH_VM 在 VM 之间切换。攻击者必须同时逆向 3 套映射。
-        const vmId = Math.floor(this.rng() * VM_COUNT);
+        // 之后由字节码内的 SWITCH_VM 在 VM 之间切换。
+        // v0.6 F5：只在 REAL_VM_IDS (0/1/2) 中分配。假 VM (3/4) 仅用于诱饵分支。
+        const vmId = REAL_VM_IDS[Math.floor(this.rng() * REAL_VM_IDS.length)];
         const proto = {
             instructions: [],
             constants: [],
@@ -261,6 +271,40 @@ class Compiler {
         func.proto.constants = func.pool.getAll();
         func.proto.subFunctions = func.subFuncs;
         func.proto.upvalues = func.scope.upvalues;
+        // v0.6 F4: 每个 proto 独立的指令 XOR seed
+        this.protoCounter = (this.protoCounter + 1) >>> 0;
+        func.proto.insnSeed = (this.seed ^ (this.protoCounter * 0x9E3779B1)) >>> 0;
+        // v0.6 F3: 对敏感常量加盲
+        const nConst = func.proto.constants.length;
+        if (nConst > 0) {
+            const descs = new Array(nConst);
+            const localRng = mulberry32((this.seed ^ (this.protoCounter * 0x6D2B79F5)) >>> 0);
+            for (let i = 0; i < nConst; i++) {
+                const entry = func.proto.constants[i];
+                let desc = null;
+                if (entry.type === "string" && entry.value.length >= this.BLIND_STR_MIN) {
+                    // str_xor: 4..8 字节密钥
+                    const klen = 4 + Math.floor(localRng() * 5);
+                    const key = new Array(klen);
+                    for (let k = 0; k < klen; k++)
+                        key[k] = Math.floor(localRng() * 256);
+                    desc = { kind: "str_xor", key };
+                }
+                else if (entry.type === "number" && Math.abs(entry.value) >= this.BLIND_NUM_MIN) {
+                    // num_split: 随机 k2，使 stored = value + k2
+                    const sign = localRng() < 0.5 ? -1 : 1;
+                    const magnitude = 1e-6 + localRng() * 1e4;
+                    let k2 = sign * magnitude;
+                    // 防止 stored (value + k2) 出现 NaN/Infinity
+                    const stored = entry.value + k2;
+                    if (!Number.isFinite(stored))
+                        k2 = -k2;
+                    desc = { kind: "num_split", k2 };
+                }
+                descs[i] = desc;
+            }
+            func.proto.blindDescs = descs;
+        }
         return func.proto;
     }
     // ---- Block compilation ----

@@ -248,7 +248,22 @@ export interface FuncPrototype {
   // v0.8 多 VM：本函数默认使用的 VM 编号 (0/1/2)。
   // undefined 视为 0（向后兼容 v0.4 序列化格式）。
   vmId?: number;
+  // ---- v0.6 new fields ----
+  // v0.6 F3: constant blinding. Parallel array to constants. Entry i != null means
+  // constant[i] is stored blinded and must be un-blinded at first LOADK.
+  blindDescs?: (BlindDesc | null)[];
+  // v0.6 F4: per-proto PRNG seed for instruction-field XOR keystream.
+  // undefined = not encrypted (backward compat with unencoded protos used in tests).
+  insnSeed?: number;
 }
+
+// ---- v0.6 F3: constant blinding descriptors ----
+// Numbers use subtraction split (safe for doubles, no bit fiddling).
+// Strings use chunked single-byte-key XOR (the same key pattern repeats).
+
+export type BlindDesc =
+  | { kind: "num_split"; k2: number }      // value = stored_k1 - k2  (stored_k1 = value + k2)
+  | { kind: "str_xor"; key: number[] };  // bytes[i] XOR key[i % len]
 
 // ---- v0.8: 多 VM 交替执行 ----
 // 运行时内置 3 套 opcode 映射。同一语义 Op 在不同 VM 中对应不同的
@@ -262,11 +277,17 @@ export interface FuncPrototype {
 export const OP_SWITCH_VM = 200;
 export const OP_DEAD_VM = 201;
 
-/** v0.8 多 VM：内置 VM 数量。VM0 复用标准 OP_ALIASES；VM1/VM2 用 seed 派生置换。
- *  诱饵 VM（>= VM_COUNT）的寄存器全是垃圾，永远不应被真正执行。 */
-export const VM_COUNT = 3;
-/** 诱饵 VM 编号：DEAD_VM 指令 / 死区 SWITCH_VM 跳转到这些编号制造混淆。 */
-export const DEAD_VM_IDS = [3, 4, 5];
+/** v0.8 多 VM：内置 VM 数量。VM0-2 复用标准 OP_ALIASES / 派生置换（真VM）。
+ *  v0.6 F5：VM3-4 是假 VM（有完整 dispatch 表，但是惰性 junk 写入高寄存器区）。*/
+export const VM_COUNT = 5;
+/** 真 VM 编号：VM0/1/2（3 套真实执行环境，与 v0.8 兼容）。*/
+export const REAL_VM_IDS = [0, 1, 2];
+/** 假 VM 编号：VM3/4（v0.6 F5）。有完整 dispatch 结构，但只在 OPAQUE_FALSE 分支
+ *  中短暂进入并写入高寄存器（regs[200..255]），不影响真实执行。*/
+export const FAKE_VM_IDS = [3, 4];
+/** 死 VM 编号：DEAD_VM 指令 / 死区 SWITCH_VM 跳转到这些编号制造混淆。
+ *  这些 ID > VM_COUNT，运行时 current_vm 到这里会触发 no-map 错误（永不执行）。*/
+export const DEAD_VM_IDS = [5, 6, 7];
 
 /** 构建指定 VM 的 op→sem 反查表。
  *  VM0 用 OP_ALIASES 本身；VM1/VM2 用 seed 派生的置换。

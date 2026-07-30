@@ -74,13 +74,28 @@ export interface FuncPrototype {
         index: number;
     }[];
     vmId?: number;
+    blindDescs?: (BlindDesc | null)[];
+    insnSeed?: number;
 }
+export type BlindDesc = {
+    kind: "num_split";
+    k2: number;
+} | {
+    kind: "str_xor";
+    key: number[];
+};
 export declare const OP_SWITCH_VM = 200;
 export declare const OP_DEAD_VM = 201;
-/** v0.8 多 VM：内置 VM 数量。VM0 复用标准 OP_ALIASES；VM1/VM2 用 seed 派生置换。
- *  诱饵 VM（>= VM_COUNT）的寄存器全是垃圾，永远不应被真正执行。 */
-export declare const VM_COUNT = 3;
-/** 诱饵 VM 编号：DEAD_VM 指令 / 死区 SWITCH_VM 跳转到这些编号制造混淆。 */
+/** v0.8 多 VM：内置 VM 数量。VM0-2 复用标准 OP_ALIASES / 派生置换（真VM）。
+ *  v0.6 F5：VM3-4 是假 VM（有完整 dispatch 表，但是惰性 junk 写入高寄存器区）。*/
+export declare const VM_COUNT = 5;
+/** 真 VM 编号：VM0/1/2（3 套真实执行环境，与 v0.8 兼容）。*/
+export declare const REAL_VM_IDS: number[];
+/** 假 VM 编号：VM3/4（v0.6 F5）。有完整 dispatch 结构，但只在 OPAQUE_FALSE 分支
+ *  中短暂进入并写入高寄存器（regs[200..255]），不影响真实执行。*/
+export declare const FAKE_VM_IDS: number[];
+/** 死 VM 编号：DEAD_VM 指令 / 死区 SWITCH_VM 跳转到这些编号制造混淆。
+ *  这些 ID > VM_COUNT，运行时 current_vm 到这里会触发 no-map 错误（永不执行）。*/
 export declare const DEAD_VM_IDS: number[];
 /** 构建指定 VM 的 op→sem 反查表。
  *  VM0 用 OP_ALIASES 本身；VM1/VM2 用 seed 派生的置换。

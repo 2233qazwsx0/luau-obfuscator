@@ -12,6 +12,10 @@
 -- template is self-obfuscated through the D1-D5 pipeline, the emitter prepends
 -- its own _B polyfill (src/emit/bit32_polyfill.ts) which D2/D3 rely on.
 
+-- Lua 5.4 compat: unpack moved to table.unpack. Luau has both, standard Lua 5.4
+-- only has table.unpack. Use whichever is available.
+local unpack = table.unpack or unpack
+
 --[[__MEMWIPE_BEGIN__]]
 -- ---- v0.5 内存清理辅助函数 ----
 -- 安全置空：先用全零/空值覆写，再解除引用，防止内存 dump 拿到明文残片。
@@ -205,6 +209,10 @@ local function make_reader(data)
     pos = function() return state.pos end,
     seek = function(p) state.pos = p end,
     sub = function(off, len) return string.sub(data, off, off + len - 1) end,
+    peek_u32 = function()
+      local b0, b1, b2, b3 = string.byte(data, state.pos, state.pos + 3)
+      return (b0 or 0) + (b1 or 0) * 256 + (b2 or 0) * 65536 + (b3 or 0) * 16777216
+    end,
   }
 end
 
@@ -237,26 +245,76 @@ end
 -- --------------------------------------------------------------------------
 -- Function prototype deserializer  (inverse of encoder.serializeFunction)
 -- --------------------------------------------------------------------------
+-- v0.6 扩展：
+--   F3: 常量盲化（num_split / str_xor），存储时 + 运行时首次访问解密并缓存
+--   F4: 指令字段 XOR 加密，每 proto 独立 seed，执行时按 IP 解密
+--   F5: vm_id 扩展到 0..4 (5 VM)，末尾新增 has_insn_seed/insn_seed
+--
+-- 检测方式：读完 constants 之后，下一个 u32 == num_consts 且 num_consts >= 1 → v0.6。
 local function deserialize_proto(reader)
   local num_insns = reader.u32()
+  -- F4: 存加密的 (b8, b9) 对，以及（若无 seed）预解码 instructions[]
+  local enc_b8 = {}
+  local enc_b9 = {}
   local instructions = {}
   for i = 1, num_insns do
     local b8 = reader.u32()
     local b9 = reader.u32()
-    instructions[i] = decode_insn(b8, b9)
+    enc_b8[i] = b8
+    enc_b9[i] = b9
+    instructions[i] = decode_insn(b8, b9)  -- 会在 insn_seed 存在时被覆写
   end
 
   local num_consts = reader.u32()
-  local constants = {}
+  local raw_constants = {}  -- 存储的（盲化后）原始常量
   for i = 1, num_consts do
     local tag = reader.u8()
     if tag == 0 then
-      constants[i] = reader.str()
+      raw_constants[i] = reader.str()
     elseif tag == 1 then
-      constants[i] = reader.u8() ~= 0
+      raw_constants[i] = reader.u8() ~= 0
     else
-      constants[i] = reader.f64()
+      raw_constants[i] = reader.f64()
     end
+  end
+
+  -- v0.6 格式检测
+  local before_blind = reader.pos()
+  local peek = reader.peek_u32()
+  local is_v06 = (peek == num_consts and num_consts >= 1)
+  if num_consts == 0 and peek == 0 then
+    -- 边界保守判断：num_consts=0 时仍按 v0.6 解析
+    is_v06 = true
+  end
+
+  local blind_descs = nil
+  local constants = nil
+  if is_v06 then
+    -- 跳过 num_blind u32
+    reader.u32()
+    blind_descs = {}
+    for i = 1, num_consts do
+      local t = reader.u8()
+      if t == 0 then
+        blind_descs[i] = false
+      elseif t == 1 then
+        blind_descs[i] = { "num_split", reader.f64() }
+      elseif t == 2 then
+        local klen = reader.u8()
+        local k = {}
+        for j = 1, klen do k[j] = reader.u8() end
+        blind_descs[i] = { "str_xor", k }
+      else
+        blind_descs[i] = false
+      end
+    end
+    -- F3: 常量数组延迟解密初始化：consts[i] = nil 表示尚未解密
+    constants = {}
+    for i = 1, num_consts do constants[i] = nil end
+  else
+    -- 旧格式：无盲化
+    blind_descs = nil
+    constants = raw_constants
   end
 
   local param_count = reader.u8()
@@ -281,12 +339,35 @@ local function deserialize_proto(reader)
     upvalues[i] = { from_stack = from_stack, index = idx }
   end
 
-  -- v0.8 多 VM：函数默认 VM 编号（0/1/2）。旧字节码没有该字段时默认 0。
+  -- vm_id
   local vm_id = reader.u8() or 0
+
+  -- F4: has_insn_seed + insn_seed
+  local insn_seed = nil
+  if is_v06 then
+    local has_seed = reader.u8()
+    if has_seed and has_seed ~= 0 then
+      insn_seed = reader.u32()
+    end
+  end
+
+  -- F4: 指令解密（与 TS deserializeFunction 逻辑一致）
+  if insn_seed ~= nil then
+    local rng = mulberry32(insn_seed)
+    for i = 1, num_insns do
+      local k8 = math.floor(rng() * 4294967296) % 4294967296
+      local k9 = math.floor(rng() * 4294967296) % 4294967296
+      local b8 = bxor32(enc_b8[i], k8)
+      local b9 = bxor32(enc_b9[i], k9)
+      instructions[i] = decode_insn(b8, b9)
+    end
+  end
 
   return {
     instructions = instructions,
     constants = constants,
+    _raw_constants = raw_constants,  -- F3 专用
+    _blind_descs = blind_descs,     -- F3 专用 (false 表示无盲化)
     sub_functions = sub_functions,
     param_count = param_count,
     is_vararg = is_vararg,
@@ -304,7 +385,7 @@ end
 -- 再按语义 dispatch。同一语义在 3 个 VM 下对应不同 op 号 → 攻击者必须同时
 -- 逆向 3 套映射表。
 local VM_SEED = __VM_SEED__
-local VM_COUNT = 3
+local VM_COUNT = 5   -- v0.6 F5: VM0-2 real, VM3-4 fake (full dispatch, inert writes)
 local OP_SWITCH_VM = 200
 local OP_DEAD_VM = 201
 
@@ -424,6 +505,54 @@ local function build_vm_maps(seed)
 end
 
 -- --------------------------------------------------------------------------
+-- v0.6 F3: 常量盲化运行时支持
+-- --------------------------------------------------------------------------
+-- 对单个字符串字节逐位 XOR（单字节 key 循环）。
+local function str_xor(s, key)
+  local klen = #key
+  if klen == 0 then return s end
+  local parts = {}
+  for i = 1, #s do
+    local c = string.byte(s, i)
+    local k = key[((i - 1) % klen) + 1] or 0
+    parts[i] = string.char(bxor32(c, k) % 256)
+  end
+  return table.concat(parts)
+end
+
+-- 返回常量 i（1-indexed），首次访问时若存在 blind_desc 则解密并缓存。
+-- proto.constants[i] == nil 表示首次访问（已盲化）。
+local function make_const_access(proto)
+  local raw = proto._raw_constants
+  local descs = proto._blind_descs
+  local consts = proto.constants
+  if not descs then
+    return function(i) return consts[i] end
+  end
+  return function(i)
+    local v = consts[i]
+    if v ~= nil then return v end
+    local r = raw[i]
+    local d = descs[i]
+    if not d then
+      consts[i] = r
+      return r
+    end
+    if d[1] == "num_split" then
+      local dec = r - d[2]
+      consts[i] = dec
+      return dec
+    elseif d[1] == "str_xor" then
+      local dec = str_xor(r, d[2])
+      consts[i] = dec
+      return dec
+    end
+    consts[i] = r
+    return r
+  end
+end
+
+-- --------------------------------------------------------------------------
 -- VM execution engine — 70+ opcode dispatch
 -- --------------------------------------------------------------------------
 -- Forward declare vm_execute so make_closure can reference it (Lua locals
@@ -459,10 +588,13 @@ function vm_execute(proto, env, upvals, args)
   local regs = {}
   local ip = 1
   local code = proto.instructions
-  local consts = proto.constants
+  -- F3: 常量访问器（首次访问盲化常量时解密并缓存）
+  local K = make_const_access(proto)
   local ncode = #code
   -- v0.8：当前 VM 编号。从 proto.vm_id 起步，遇到 SWITCH_VM (op 200) 切换。
+  -- v0.6 F5：VM3/4 为假 VM（仅写入高寄存器区，真实语义保持）。
   local current_vm = proto.vm_id or 0
+  local last_real_vm = (current_vm <= 2) and current_vm or 0
   local maps = vm_maps
 
   -- Set up parameters (0-indexed registers, 1-indexed args)
@@ -473,13 +605,25 @@ function vm_execute(proto, env, upvals, args)
   end
 
   while ip <= ncode do
+    -- v0.6 F5：假 VM 分支 → 写入高寄存器(200..255)惰性垃圾并立即退回最近真VM。
+    -- 真执行永远不会走这里；假 VM 只在不透明谓词的永假分支里 SWITCH_VM 到。
+    if current_vm == 3 or current_vm == 4 then
+      local junk = (ip * 1315423911 + current_vm * 2654435761) % 4294967296
+      local iter = 3 + (junk % 5)
+      for f = 1, iter do
+        local ridx = 200 + ((junk + f * 17) % 56)
+        regs[ridx] = ((junk * (f + 3)) % 999991) * 0.0037
+      end
+      current_vm = last_real_vm
+    end
+
     local inst = code[ip]
     local op = inst.op
 
     -- v0.8：保留 op 号优先 dispatch（不参与各 VM 的 op 映射）。
     if op == OP_SWITCH_VM then             -- SWITCH_VM: current_vm = C
       current_vm = inst.C
-      print("[DBG] SWITCH_VM at ip=" .. tostring(ip) .. " -> vm=" .. tostring(current_vm))
+      if current_vm <= 2 then last_real_vm = current_vm end
     elseif op == OP_DEAD_VM then           -- DEAD_VM：诱饵，真执行到即报错
       error("VM: reached DEAD_VM decoy at ip=" .. tostring(ip))
     else
@@ -489,7 +633,7 @@ function vm_execute(proto, env, upvals, args)
 
       -- ---- Arithmetic ----
       if sem == "ADD_RC" then              -- R[A] = R[B] + K[C]
-        regs[A] = (regs[B] or 0) + (consts[C + 1] or 0)
+        regs[A] = (regs[B] or 0) + (K(C + 1) or 0)
       elseif sem == "ADD_RR" then          -- R[A] = R[B] + R[C]
         regs[A] = (regs[B] or 0) + (regs[C] or 0)
       elseif sem == "SUB_RR" then
@@ -501,7 +645,7 @@ function vm_execute(proto, env, upvals, args)
       elseif sem == "MOD_RR" then
         regs[A] = (regs[B] or 0) % (regs[C] or 0)
       elseif sem == "MOD_RC" then          -- R[A] = R[B] % K[C]
-        regs[A] = (regs[B] or 0) % (consts[C + 1] or 0)
+        regs[A] = (regs[B] or 0) % (K(C + 1) or 0)
       elseif sem == "POW_RR" then
         regs[A] = (regs[B] or 0) ^ (regs[C] or 0)
 
@@ -523,7 +667,7 @@ function vm_execute(proto, env, upvals, args)
       elseif sem == "MOVE" then
         regs[A] = regs[B]
       elseif sem == "LOADK" then
-        regs[A] = consts[B + 1]
+        regs[A] = K(B + 1)
       elseif sem == "LOADBOOL" then        -- C=2 sentinel → new table
         if C == 2 then
           regs[A] = {}
@@ -542,22 +686,22 @@ function vm_execute(proto, env, upvals, args)
       -- ---- Table access ----
       elseif sem == "GETFIELD_K" then      -- R[A+1]=R[B]; R[A]=R[B][K[C]]
         regs[A + 1] = regs[B]
-        regs[A] = regs[B][consts[C + 1]]
+        regs[A] = regs[B][K(C + 1)]
       elseif sem == "GETFIELD_K2" then     -- R[A] = R[B][K[C]]
-        regs[A] = regs[B][consts[C + 1]]
+        regs[A] = regs[B][K(C + 1)]
       elseif sem == "GETTABLE_RR" then     -- R[A] = R[B][R[C]]
         regs[A] = regs[B][regs[C]]
       elseif sem == "SETTABLE" then        -- R[A][K[B]] = R[C]
-        regs[A][consts[B + 1]] = regs[C]
+        regs[A][K(B + 1)] = regs[C]
       elseif sem == "SETTABLE_RR" then     -- R[A][R[B]] = R[C]
         regs[A][regs[B]] = regs[C]
 
       -- ---- Upvalues / Globals ----
       -- GETUPVAL 被编译器复用为全局访问：R[A] = env[K[B]]
       elseif sem == "GETUPVAL" then
-        regs[A] = env[consts[B + 1]]
+        regs[A] = env[K(B + 1)]
       elseif sem == "SETGLOBAL" then       -- env[K[B]] = R[A]
-        env[consts[B + 1]] = regs[A]
+        env[K(B + 1)] = regs[A]
       elseif sem == "GETUPVAL_REAL" then   -- R[A] = upvals[B+1].v
         regs[A] = upvals[B + 1].v
       elseif sem == "SETUPVAL_REAL" then   -- upvals[B+1].v = R[A]
@@ -567,7 +711,7 @@ function vm_execute(proto, env, upvals, args)
       elseif sem == "CLOSURE" or sem == "CLOSURE_SIMPLE" then
         local sub = proto.sub_functions[B + 1]
         if sub == nil then
-          print("[DBG] CLOSURE sub nil! B=" .. tostring(B) .. " nsubs=" .. tostring(#proto.sub_functions) .. " ip=" .. tostring(ip) .. " vm=" .. tostring(current_vm))
+          error("VM: CLOSURE sub nil! B=" .. tostring(B) .. " nsubs=" .. tostring(#proto.sub_functions) .. " ip=" .. tostring(ip) .. " vm=" .. tostring(current_vm))
         end
         regs[A] = make_closure(sub, env, regs, upvals, A)
 
@@ -623,7 +767,7 @@ function vm_execute(proto, env, upvals, args)
           ip = ip + C - 1
         end
       elseif sem == "TEST_EQ_K" then       -- if R[A]==K[C] → pc++ else pc+=C
-        if regs[A] == consts[C + 1] then
+        if regs[A] == K(C + 1) then
           -- fall through (ip += 1)
         else
           ip = ip + C - 1
@@ -712,7 +856,7 @@ local function vm_boot()
   -- visible while letting the script declare its own globals.
   local env = setmetatable({}, { __index = _G })
 
-  -- v0.8：构建 3 套 VM 的 op→sem 反查表。vm_execute 通过 upvalue 引用 vm_maps。
+  -- v0.6：构建 5 套 VM 的 op→sem 反查表（0/1/2 真，3/4 假）。vm_execute 通过 upvalue 引用。
   vm_maps = build_vm_maps(VM_SEED)
 
   --[[__MEMWIPE_BEGIN__]]

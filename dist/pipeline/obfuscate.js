@@ -9,8 +9,8 @@ import { emit } from "../emit/emitter.js";
 import { buildCipher } from "../transforms/strings.js";
 import { renameIdentifiers } from "../transforms/identifier.js";
 import { mulberry32, randInt } from "../util/prng.js";
-import { flattenAST } from "../ir/flatten.js";
-import { injectDeadcode } from "../transforms/deadcode.js";
+import { flattenAST, flattenRecursive } from "../ir/flatten.js";
+import { injectDeadcode, injectDeadcodeRecursive } from "../transforms/deadcode.js";
 import { compileVM, compileVMWithRuntime } from "../vm/pipeline.js";
 /** v0.8：混淆器输出末尾的水印签名（Luau 行注释，不影响执行）。 */
 const OBFUSCATOR_SIGNATURE = "\n-----国人写的加密-CUA混淆器QQ3290274245";
@@ -41,14 +41,26 @@ export function runPipeline(src, opts = {}) {
     // 3.5. Dead code injection (D5): AST -> AST rewrite.
     // v0.6: 在 VM 编译前执行，让字节码里跑的也是含死代码的混淆版本。
     // Runs before D4 so dead code nodes get flattened into dispatch cases.
+    // v0.6 F2: recursiveDeadcode 默认开启；每个作用域独立注入 + 不透明谓词包裹。
     if (!opts.noDeadcode) {
-        ast = injectDeadcode(ast, seed);
+        if (opts.recursiveDeadcode !== false) {
+            ast = injectDeadcodeRecursive(ast, seed);
+        }
+        else {
+            ast = injectDeadcode(ast, seed);
+        }
     }
     // 3.6. Control-flow flattening (D4): AST -> AST rewrite.
     // v0.6: 在 VM 编译前执行。攻击者解字节码后还要再逆向一层 D4 才能还原原始控制流。
     // Runs before VM compile / D2/D3 so the walk passes cover all new dispatch nodes.
+    // v0.6 F1: recursiveFlatten 默认开启；每个函数作用域独立生成 dispatch。
     if (!opts.noFlatten) {
-        ast = flattenAST(ast, seed);
+        if (opts.recursiveFlatten !== false) {
+            ast = flattenRecursive(ast, seed);
+        }
+        else {
+            ast = flattenAST(ast, seed);
+        }
     }
     // If VM mode requested, branch here: compile to bytecode, skip D2/D3/emit.
     // v0.6: VM 编译器现在接收的是已经经过 D1+D5+D4 混淆的 AST，字节码内嵌混淆代码。
@@ -62,18 +74,21 @@ export function runPipeline(src, opts = {}) {
                 frag: !opts.noFrag,
             };
             const runtimeSrc = compileVMWithRuntime(ast, seed, rtOpts);
-            // Self-obfuscate the runtime template through the D1-D5 pipeline.
-            // The recursive call must NOT set vm/runtime (no infinite loop).
-            // A derived seed keeps the template's obfuscation independent of the
-            // bytecode's compilation (which already consumed `seed` for aliases).
+            // Self-obfuscate the runtime template through the D1-D3 pipeline only.
+            // The runtime template has many complex function bodies with early returns
+            // inside nested If blocks. Applying D4 (flatten) or D5 (dead code) to
+            // such code can produce unbalanced if/end (see D4/D5 bugs on complex ASTs).
+            // Skipping D4/D5 here is safe — the bytecode INSIDE the blob is already
+            // protected by D1+D5+D4+F3+F4+F5, while the outer template wrapper only
+            // handles blob loading / decoding / dispatch.
             const selfSeed = (seed ^ 0x5E1FA0) >>> 0;
             const selfResult = runPipeline(runtimeSrc, {
                 seed: selfSeed,
                 noRename: opts.noRename,
                 noNumbers: opts.noNumbers,
                 noStrings: opts.noStrings,
-                noFlatten: opts.noFlatten,
-                noDeadcode: opts.noDeadcode,
+                noFlatten: true, // outer template: skip D4
+                noDeadcode: true, // outer template: skip D5
                 minify: opts.minify,
                 _internal: true, // 递归自调用：签名由外层统一追加，避免重复
             });
