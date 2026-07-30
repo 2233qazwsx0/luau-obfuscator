@@ -73,7 +73,22 @@ export interface FuncPrototype {
         fromStack: boolean;
         index: number;
     }[];
+    vmId?: number;
 }
+export declare const OP_SWITCH_VM = 200;
+export declare const OP_DEAD_VM = 201;
+/** v0.8 多 VM：内置 VM 数量。VM0 复用标准 OP_ALIASES；VM1/VM2 用 seed 派生置换。
+ *  诱饵 VM（>= VM_COUNT）的寄存器全是垃圾，永远不应被真正执行。 */
+export declare const VM_COUNT = 3;
+/** 诱饵 VM 编号：DEAD_VM 指令 / 死区 SWITCH_VM 跳转到这些编号制造混淆。 */
+export declare const DEAD_VM_IDS: number[];
+/** 构建指定 VM 的 op→sem 反查表。
+ *  VM0 用 OP_ALIASES 本身；VM1/VM2 用 seed 派生的置换。
+ *  返回 Map<number, Op>：vmInternalOp → 语义 Op。 */
+export declare function buildVmOpMap(seed: number, vmId: number): Map<number, Op>;
+/** 构建 sem→op 的正向表（编译器用：给定语义，返回该 VM 下的 op 号）。
+ *  对于有多别名的语义，随机选一个。 */
+export declare function buildSemToOpMap(seed: number, vmId: number, rng: () => number): Map<Op, number>;
 export type ConstEntry = {
     type: "string";
     value: string;

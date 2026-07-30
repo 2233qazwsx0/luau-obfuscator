@@ -23,6 +23,8 @@
 //   C (bc[5] in ref): source register/constant index or jump offset
 //   D: extra operand for fused ops
 
+import { mulberry32 } from "../util/prng.js";
+
 // ---- Semantic opcode groups ----
 // The 70 numbers map to ~35 unique semantics. We define both the semantic
 // enum and the full 70-number alias table for the runtime dispatch.
@@ -243,6 +245,78 @@ export interface FuncPrototype {
   // fromStack=true → capture from parent's register stack (bs)
   // fromStack=false → capture from parent's upvalues (bh)
   upvalues: { fromStack: boolean; index: number }[];
+  // v0.8 多 VM：本函数默认使用的 VM 编号 (0/1/2)。
+  // undefined 视为 0（向后兼容 v0.4 序列化格式）。
+  vmId?: number;
+}
+
+// ---- v0.8: 多 VM 交替执行 ----
+// 运行时内置 3 套 opcode 映射。同一语义 Op 在不同 VM 中对应不同的
+// dispatch 号。编译器为每个函数随机分配 vmId，并在函数内部随机插入
+// SWITCH_VM 指令切换上下文。攻击者必须同时逆向 3 套映射表。
+//
+// 保留 op 号（不参与上述 70 号表，由运行时单独 dispatch）：
+//   200 = SWITCH_VM (C = 目标 vmId)
+//   201 = DEAD_VM   (诱饵：跳转到垃圾区，永不执行)
+
+export const OP_SWITCH_VM = 200;
+export const OP_DEAD_VM = 201;
+
+/** v0.8 多 VM：内置 VM 数量。VM0 复用标准 OP_ALIASES；VM1/VM2 用 seed 派生置换。
+ *  诱饵 VM（>= VM_COUNT）的寄存器全是垃圾，永远不应被真正执行。 */
+export const VM_COUNT = 3;
+/** 诱饵 VM 编号：DEAD_VM 指令 / 死区 SWITCH_VM 跳转到这些编号制造混淆。 */
+export const DEAD_VM_IDS = [3, 4, 5];
+
+/** 构建指定 VM 的 op→sem 反查表。
+ *  VM0 用 OP_ALIASES 本身；VM1/VM2 用 seed 派生的置换。
+ *  返回 Map<number, Op>：vmInternalOp → 语义 Op。 */
+export function buildVmOpMap(seed: number, vmId: number): Map<number, Op> {
+  // OP_ALIASES 的条目数（键 0..N-1）。运行时与编译器必须用同一个 N。
+  const aliasKeys = Object.keys(OP_ALIASES).map(Number).sort((a, b) => a - b);
+  const n = aliasKeys.length;
+  if (vmId === 0) {
+    // VM0 直接复用标准表
+    const m = new Map<number, Op>();
+    for (const num of aliasKeys) m.set(num, OP_ALIASES[num]!);
+    return m;
+  }
+  // VM1/VM2：以 seed+vmId 为种子打乱 0..N-1 的顺序，重新分配语义。
+  // 同一个语义在 VM1/VM2 下对应不同的 op 号。
+  const rng = mulberry32(((seed ^ 0x5AA00000) >>> 0) + vmId * 0x9E3779B1);
+  const order = Array.from({ length: n }, (_, i) => i);
+  // Fisher-Yates 洗牌
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = order[i]!;
+    order[i] = order[j]!;
+    order[j] = tmp;
+  }
+  // 把 OP_ALIASES 的语义（按 op 号升序）按洗牌后的 op 号顺序重新分配。
+  // entries[i] 的语义 → 在本 VM 下编号为 order[i]。
+  const entries = Object.entries(OP_ALIASES).sort((a, b) => Number(a[0]) - Number(b[0]));
+  const m = new Map<number, Op>();
+  for (let i = 0; i < entries.length; i++) {
+    m.set(order[i]!, entries[i]![1] as Op);
+  }
+  return m;
+}
+
+/** 构建 sem→op 的正向表（编译器用：给定语义，返回该 VM 下的 op 号）。
+ *  对于有多别名的语义，随机选一个。 */
+export function buildSemToOpMap(seed: number, vmId: number, rng: () => number): Map<Op, number> {
+  const opMap = buildVmOpMap(seed, vmId);
+  // 收集每个语义的所有 op 号
+  const semToOps = new Map<Op, number[]>();
+  for (const [num, sem] of opMap) {
+    if (!semToOps.has(sem)) semToOps.set(sem, []);
+    semToOps.get(sem)!.push(num);
+  }
+  const result = new Map<Op, number>();
+  for (const [sem, ops] of semToOps) {
+    result.set(sem, ops[Math.floor(rng() * ops.length)]!);
+  }
+  return result;
 }
 
 export type ConstEntry =

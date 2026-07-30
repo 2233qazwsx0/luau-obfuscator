@@ -56,5 +56,6 @@ export function compileVMWithRuntime(
   opts: RuntimeProtectOptions = DEFAULT_RUNTIME_PROTECT,
 ): string {
   const { hex, cipherKey } = compileVM(ast, seed);
-  return buildRuntime(hex, cipherKey, opts);
+  // v0.8：把 seed 透传给运行时模板，用于重建 3 套 VM opcode 映射表。
+  return buildRuntime(hex, cipherKey, opts, seed);
 }

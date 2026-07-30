@@ -145,12 +145,15 @@ function genFragmentedAssembly(varName: string, hex: string, seed: number): stri
  * @param hex       Packed hex bytecode (from compileVM().hex)
  * @param cipherKey Stream cipher key (0-255)
  * @param opts      运行时保护选项（默认全开）
+ * @param vmSeed    v0.8 多 VM：派生 opcode 映射表的种子（与编译器同源）。
+ *                  运行时用它重建 3 套 op→sem 反查表。
  * @returns Final Luau source that, when executed, decodes and runs the bytecode
  */
 export function buildRuntime(
   hex: string,
   cipherKey: number,
   opts: RuntimeProtectOptions = DEFAULT_RUNTIME_PROTECT,
+  vmSeed: number = 0,
 ): string {
   let template = readFileSync(TEMPLATE_PATH, "utf8");
   const memwipe = opts.memwipe !== false;
@@ -201,6 +204,10 @@ export function buildRuntime(
 
   // 4. cipher key 替换（数字字面量）。
   template = template.replace(/__CIPHER_KEY__/g, String(cipherKey));
+
+  // 5. v0.8 多 VM：注入 opcode 映射表种子（数字字面量，32 位）。
+  //    运行时用它与编译器同源的 buildVmOpMap 算法重建 3 套 op→sem 表。
+  template = template.replace(/__VM_SEED__/g, String(vmSeed >>> 0));
 
   return template;
 }

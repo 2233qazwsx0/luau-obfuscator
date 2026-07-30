@@ -23,6 +23,8 @@ export interface ObfuscateOptions {
     noAntidump?: boolean;
     /** Disable hex blob fragmentation (v0.7). */
     noFrag?: boolean;
+    /** @internal 递归自调用标记，抑制重复追加签名。 */
+    _internal?: boolean;
 }
 export interface ObfuscateResult {
     out: string;

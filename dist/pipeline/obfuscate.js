@@ -12,6 +12,8 @@ import { mulberry32, randInt } from "../util/prng.js";
 import { flattenAST } from "../ir/flatten.js";
 import { injectDeadcode } from "../transforms/deadcode.js";
 import { compileVM, compileVMWithRuntime } from "../vm/pipeline.js";
+/** v0.8：混淆器输出末尾的水印签名（Luau 行注释，不影响执行）。 */
+const OBFUSCATOR_SIGNATURE = "\n-----国人写的加密-CUA混淆器QQ3290274245";
 export function obfuscateSource(src, opts = {}) {
     return runPipeline(src, opts).out;
 }
@@ -73,8 +75,11 @@ export function runPipeline(src, opts = {}) {
                 noFlatten: opts.noFlatten,
                 noDeadcode: opts.noDeadcode,
                 minify: opts.minify,
+                _internal: true, // 递归自调用：签名由外层统一追加，避免重复
             });
-            return { out: selfResult.out, cipher: selfResult.cipher, nameMap: renameMap };
+            // v0.8：在最终可执行脚本末尾追加水印签名（顶层调用才加）。
+            const out = opts._internal ? selfResult.out : selfResult.out + OBFUSCATOR_SIGNATURE;
+            return { out, cipher: selfResult.cipher, nameMap: renameMap };
         }
         const vmResult = compileVM(ast, seed);
         return { out: vmResult.hex, cipher, nameMap: renameMap, vmHex: vmResult.hex };
@@ -131,6 +136,10 @@ export function runPipeline(src, opts = {}) {
     // 7. Minify (optional)
     if (opts.minify) {
         out = out.split("\n").filter((l) => l.trim() !== "").join(" ");
+    }
+    // 8. v0.8：顶层调用在输出末尾追加水印签名（递归自调用 _internal 不加）。
+    if (!opts._internal) {
+        out += OBFUSCATOR_SIGNATURE;
     }
     return { out, cipher, nameMap: renameMap };
 }
