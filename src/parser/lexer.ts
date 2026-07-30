@@ -353,6 +353,11 @@ const OP_TABLE: string[] = [
   // 1-char
   "+", "-", "*", "/", "%", "^", "#", "=", "<", ">", "~",
   "(", ")", "{", "}", "[", "]", ",", ";", ".", ":",
+  // Luau type-system operators (only valid inside type annotations):
+  //   ?  nullable suffix        string?
+  //   |  union type             string | number
+  //   &  intersection type      HasName & HasId
+  "?", "|", "&",
 ];
 const OP_MAX_LEN = 3;
 

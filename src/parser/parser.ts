@@ -95,7 +95,13 @@ function parseTypeAnnotation(s: PState): string | null {
 function parseTypeExpr(s: PState): string {
   let result = "";
   let depth = 0; // for nested <>, {}, [], ()
-  const terminators = new Set([",", ")", "=", "do", "then", "end", "in", ";", "return", "break", "continue", "goto", "else", "elseif", "until"]);
+  const terminators = new Set([",", ")", "=", "do", "then", "end", "in", ";", "return", "break", "continue", "goto", "else", "elseif", "until",
+    // Statement starters that may follow a return-type or bare local-type
+    // annotation at depth 0. None of these are valid inside a Luau type
+    // expression, so treating them as terminators lets a return type like
+    // `(): number?` correctly stop before the body's first statement.
+    // NOTE: `typeof` is intentionally excluded — `typeof(x)` is a valid type.
+    "if", "while", "for", "repeat", "local", "function", "type", "export"]);
   while (!atEof(s)) {
     const t = peek(s);
     if (depth === 0 && terminators.has(t.value)) break;
@@ -107,7 +113,9 @@ function parseTypeExpr(s: PState): string {
       else break;
     }
     // Handle `|` union types
-    if (result.length > 0) result += " ";
+    // `?` is a postfix nullable suffix (e.g. `string?`) — attach without a
+    // leading space so the emitted type stays `string?` rather than `string ?`.
+    if (result.length > 0 && t.value !== "?") result += " ";
     result += t.value;
     s.i++;
   }
