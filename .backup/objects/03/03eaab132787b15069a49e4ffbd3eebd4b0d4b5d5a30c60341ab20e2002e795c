@@ -1,0 +1,6 @@
+local a = ((function(K) return function(H) local O,B="",1;for i=1,#H,2 do O=O..string.char((bit32.bxor(tonumber(H:sub(i,i+1),16),(K[(i-1)%4+1]+(i-1)))%256)) end;return O end end)("AC723160"))("1A570EC3191611DC08560E")
+print('a=', a, 'type=', type(a))
+local b = (bit32.bxor(1033618434, 1033618433) + (0))
+print('b=', b, 'type=', type(b))
+local c = (bit32.bxor(1033618432, 1033618433) + (0))
+print('c=', c, 'type=', type(c))
