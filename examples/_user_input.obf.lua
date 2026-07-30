@@ -13,33 +13,99 @@ local function bx(_a,_b)
 end
 return{bx=bx}
 end)().bx
-local __b = (_B(52612367, 52612481) + (0))
+local __b = (_B(52612414, 52612481) + (0))
 
-local c, d, out, i, len, b, p, h, j, k, code, m, n, o, q, t, b0, b1, b2, b3, y, z, E, F, G, H, I, J, K, L, M, s, P, op, A, B, C, D, R, S, T, U, V, W, X, Y, Z, aa, ab, ac, ad, ae, af, ag, ah, ai, aj, vm_execute, al, uv, am, an, ao, ap, aq, ar, sub, callee, as, call_args, ret_vals, at, au, av, aw, ax, az, aA, aB, aC, aD, aE
+local c, f, n, o, out, i, len, b, p, u, w, x, code, z, E, F, G, I, b0, b1, b2, b3, M, N, O, P, Q, R, S, T, U, V, W, s, Z, op, A, B, C, D, ab, ac, ad, ae, af, ag, ah, ai, aj, ak, al, am, an, ao, ap, aq, ar, as, at, vm_execute, av, uv, aw, ax, ay, az, aA, aB, sub, callee, aC, call_args, ret_vals, aD, aE, aF, aG, aH, aI, aK, aL, aM, aN, aO, aP, aQ
 while true do
-    if (__b == (_B(52612367, 52612481) + (0))) then
-        function a(value, start, width)
-            local c = (value / ((_B(52612483, 52612481) + (0)) ^ (start - (_B(52612480, 52612481) + (0)))))
+    if (__b == (_B(52612414, 52612481) + (0))) then
+        function a(var)
+            if (type(var) == ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17742BAE0663")) then
+                return string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("166529")](((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("387869F7"), (# var))
+            elseif (type(var) == ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("10613BAB0D")) then
+                local c = next(var)
+                while (c ~= nil) do
+                    var[c] = nil
 
-            local d = (((_B(52612483, 52612481) + (0)) ^ width) - (_B(52612480, 52612481) + (0)))
-            return (math[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("026C36A81A")](c) % (d + (_B(52612480, 52612481) + (0))))
+                    c = next(var, c)
+                end
+                return nil
+            end
+            return nil
         end
 
-        __b = (_B(52612414, 52612481) + (0))
+        __b = (_B(52612381, 52612481) + (0))
     end
 
-    if (__b == (_B(52612414, 52612481) + (0))) then
+    if (__b == (_B(52612381, 52612481) + (0))) then
         if false then
             local __d0 = (_B(52614478, 52612481) + (0))
 
             __d0 = (__d0 + (_B(52616019, 52612481) + (0)))
         end
 
+        __b = (_B(52612600, 52612481) + (0))
+    end
+
+    if (__b == (_B(52612600, 52612481) + (0))) then
+        function d()
+            pcall(function()
+                                collectgarbage(((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076F35AB0D6729"))
+            end)
+        end
+
+        __b = (_B(52612595, 52612481) + (0))
+    end
+
+    if (__b == (_B(52612595, 52612481) + (0))) then
+        function e()
+            local f = false
+            pcall(function()
+                                local g = { ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0C6F36AC0E7133A818610EA1"), ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("03652DB5097330AE186915AE126000"), ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17652DB5097330AE186915AE126000"), ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("177937"), ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("03652DA00D6A2B"), ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("03652DB50D6A2B"), ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("03652DB50D63"), ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("03652DAE0C6133BF057C18"), ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("007534B71B702FA2026F"), ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("06792DA20B6B39AE") }
+
+                                local h = ((getfenv and getfenv((_B(52612481, 52612481) + (0)))) or _G)
+                                for j, k in ipairs(g) do
+                                    if (h[k] ~= nil) then
+                                        f = true
+                                        break
+                                    end
+                                end
+            end)
+
+            if f then
+                return true
+            end
+            pcall(function()
+                                if ((type(debug) == ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("10613BAB0D")) and (type(debug[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("03652DAF076B36")]) == ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("027537A41C6D32A5"))) then
+                                    local l = debug[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("03652DAF076B36")]()
+
+                                    if (l ~= nil) then
+                                        f = true
+                                    end
+                                end
+            end)
+
+            if f then
+                return true
+            end
+            return false
+        end
+
+        __b = (_B(52612437, 52612481) + (0))
+    end
+
+    if (__b == (_B(52612437, 52612481) + (0))) then
+        function m(value, start, width)
+            local n = (value / ((_B(52612483, 52612481) + (0)) ^ (start - (_B(52612480, 52612481) + (0)))))
+
+            local o = (((_B(52612483, 52612481) + (0)) ^ width) - (_B(52612480, 52612481) + (0)))
+            return (math[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("026C36A81A")](n) % (o + (_B(52612480, 52612481) + (0))))
+        end
+
         __b = (_B(52612586, 52612481) + (0))
     end
 
     if (__b == (_B(52612586, 52612481) + (0))) then
-        function e(hex)
+        function q(hex)
             local out = {  }
             for i = (_B(52612480, 52612481) + (0)), (# hex), (_B(52612483, 52612481) + (0)) do
                 out[((# out) + (_B(52612480, 52612481) + (0)))] = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076838B5")](tonumber(string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](hex, i, (i + (_B(52612480, 52612481) + (0)))), (_B(52612497, 52612481) + (0))))
@@ -47,11 +113,21 @@ while true do
             return table[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076F37A40970")](out)
         end
 
-        __b = (_B(52612437, 52612481) + (0))
+        __b = (_B(52612451, 52612481) + (0))
     end
 
-    if (__b == (_B(52612437, 52612481) + (0))) then
-        function f(data, key)
+    if (__b == (_B(52612451, 52612481) + (0))) then
+        if false then
+            local __d1 = (_B(52617178, 52612481) + (0))
+
+            __d1 = (__d1 + (_B(52609251, 52612481) + (0)))
+        end
+
+        __b = (_B(52612400, 52612481) + (0))
+    end
+
+    if (__b == (_B(52612400, 52612481) + (0))) then
+        function r(data, key)
             local len = (# data)
 
             local out = {  }
@@ -69,261 +145,145 @@ while true do
             return table[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076F37A40970")](out)
         end
 
-        __b = (_B(52612423, 52612481) + (0))
+        __b = (_B(52612479, 52612481) + (0))
     end
 
-    if (__b == (_B(52612423, 52612481) + (0))) then
-        function g(s)
+    if (__b == (_B(52612479, 52612481) + (0))) then
+        function t(s)
             if ((# s) == (_B(52612481, 52612481) + (0))) then
                 return ""
             end
 
-            local h = {  }
+            local u = {  }
             for i = (_B(52612481, 52612481) + (0)), (_B(52612478, 52612481) + (0)) do
-                h[i] = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076838B5")](i)
+                u[i] = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076838B5")](i)
             end
 
-            local j = (_B(52612225, 52612481) + (0))
+            local w = (_B(52612225, 52612481) + (0))
 
-            local k = (_B(52612480, 52612481) + (0))
+            local x = (_B(52612480, 52612481) + (0))
 
-            function l()
-                local len = tonumber(string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](s, k, k), (_B(52612517, 52612481) + (0)))
+            function y()
+                local len = tonumber(string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](s, x, x), (_B(52612517, 52612481) + (0)))
 
-                k = (k + (_B(52612480, 52612481) + (0)))
+                x = (x + (_B(52612480, 52612481) + (0)))
 
-                local code = tonumber(string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](s, k, ((k + len) - (_B(52612480, 52612481) + (0)))), (_B(52612517, 52612481) + (0)))
+                local code = tonumber(string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](s, x, ((x + len) - (_B(52612480, 52612481) + (0)))), (_B(52612517, 52612481) + (0)))
 
-                k = (k + len)
+                x = (x + len)
                 return code
             end
 
-            local m = l()
+            local z = y()
 
-            local n = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076838B5")](m)
+            local E = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076838B5")](z)
 
-            local o = { n }
-            while (k <= (# s)) do
-                local code = l()
+            local F = { E }
+            while (x <= (# s)) do
+                local code = y()
 
-                local q
+                local G
 
-                if (code < j) then
-                    q = h[code]
-                elseif (code == j) then
-                    q = (n .. string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](n, (_B(52612480, 52612481) + (0)), (_B(52612480, 52612481) + (0))))
+                if (code < w) then
+                    G = u[code]
+                elseif (code == w) then
+                    G = (E .. string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](E, (_B(52612480, 52612481) + (0)), (_B(52612480, 52612481) + (0))))
                 else
-                    error((((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("285A0EFD486D33BD0D6408AB506F0AB71130") .. (tostring(code) .. (((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("44612DE70C6D3EBF4C") .. tostring(j)))))
+                    error((((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("285A0EFD486D33BD0D6408AB506F0AB71130") .. (tostring(code) .. (((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("44612DE70C6D3EBF4C") .. tostring(w)))))
                 end
 
-                o[((# o) + (_B(52612480, 52612481) + (0)))] = q
+                F[((# F) + (_B(52612480, 52612481) + (0)))] = G
 
-                h[j] = (n .. string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](q, (_B(52612480, 52612481) + (0)), (_B(52612480, 52612481) + (0))))
+                u[w] = (E .. string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](G, (_B(52612480, 52612481) + (0)), (_B(52612480, 52612481) + (0))))
 
-                j = (j + (_B(52612480, 52612481) + (0)))
+                w = (w + (_B(52612480, 52612481) + (0)))
 
-                n = q
+                E = G
             end
-            return table[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076F37A40970")](o)
+            return table[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076F37A40970")](F)
         end
 
-        __b = (_B(52612386, 52612481) + (0))
+        __b = (_B(52612470, 52612481) + (0))
     end
 
-    if (__b == (_B(52612386, 52612481) + (0))) then
-        function r(data)
-            local t = { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = (_B(52612480, 52612481) + (0)) }
-
-            function u()
-                local b = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("06792DA2")](data, t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")])
-
-                t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = (t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + (_B(52612480, 52612481) + (0)))
-                return b
-            end
-
-            function w()
-                local b0, b1, b2, b3 = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("06792DA2")](data, t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")], (t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + (_B(52612482, 52612481) + (0))))
-
-                t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = (t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + (_B(52612485, 52612481) + (0)))
-                return ((((b0 or (_B(52612481, 52612481) + (0))) + ((b1 or (_B(52612481, 52612481) + (0))) * (_B(52612225, 52612481) + (0)))) + ((b2 or (_B(52612481, 52612481) + (0))) * (_B(52678017, 52612481) + (0)))) + ((b3 or (_B(52612481, 52612481) + (0))) * (_B(35835265, 52612481) + (0))))
-            end
-
-            function x()
-                local b0, b1, b2, b3, y, z, E, F = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("06792DA2")](data, t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")], (t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + (_B(52612486, 52612481) + (0))))
-
-                t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = (t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + (_B(52612489, 52612481) + (0)))
-
-                local G = ((((b0 or (_B(52612481, 52612481) + (0))) + ((b1 or (_B(52612481, 52612481) + (0))) * (_B(52612225, 52612481) + (0)))) + ((b2 or (_B(52612481, 52612481) + (0))) * (_B(52678017, 52612481) + (0)))) + ((b3 or (_B(52612481, 52612481) + (0))) * (_B(35835265, 52612481) + (0))))
-
-                local H = ((((y or (_B(52612481, 52612481) + (0))) + ((z or (_B(52612481, 52612481) + (0))) * (_B(52612225, 52612481) + (0)))) + ((E or (_B(52612481, 52612481) + (0))) * (_B(52678017, 52612481) + (0)))) + ((F or (_B(52612481, 52612481) + (0))) * (_B(35835265, 52612481) + (0))))
-
-                local I = (((H >= (_B(2200096129, 52612481) + (4294967296))) and (- (_B(52612480, 52612481) + (0)))) or (_B(52612480, 52612481) + (0)))
-
-                local J = (H % (_B(2200096129, 52612481) + (4294967296)))
-
-                local K = math[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("026C36A81A")]((J / (_B(53661057, 52612481) + (0))))
-
-                local L = (J % (_B(53661057, 52612481) + (0)))
-
-                local M = ((L * (_B(52612481, 52612481) + (4294967296))) + G)
-
-                if (K == (_B(52612481, 52612481) + (0))) then
-                    if (M == (_B(52612481, 52612481) + (0))) then
-                        return (I * (_B(52612481, 52612481) + (0)))
-                    end
-                    return ((I * M) * ((_B(52612483, 52612481) + (0)) ^ (- (_B(52611507, 52612481) + (0)))))
-                elseif (K == (_B(52611710, 52612481) + (0))) then
-                    if (M == (_B(52612481, 52612481) + (0))) then
-                        return (I * math[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0C753EA2")])
-                    end
-                    return ((_B(52612481, 52612481) + (0)) / (_B(52612481, 52612481) + (0)))
-                else
-                    return ((I * ((_B(52612480, 52612481) + (0)) + (M * ((_B(52612483, 52612481) + (0)) ^ (- (_B(52612533, 52612481) + (0))))))) * ((_B(52612483, 52612481) + (0)) ^ (K - (_B(52612734, 52612481) + (0)))))
-                end
-            end
-
-            function N()
-                local len = u()
-
-                if (len == (_B(52612478, 52612481) + (0))) then
-                    len = w()
-                end
-
-                local s = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](data, t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")], ((t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + len) - (_B(52612480, 52612481) + (0))))
-
-                t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = (t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + len)
-                return s
-            end
-            return { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")] = u, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")] = w, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("02366D")] = x, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17742B")] = N, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = function()
-                                return t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")]
-            end, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17653CAC")] = function(p)
-                                t[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = p
-            end, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")] = function(aF, len)
-                                return string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](data, aF, ((aF + len) - (_B(52612480, 52612481) + (0))))
-            end }
-        end
-
-        __b = (_B(52612595, 52612481) + (0))
-    end
-
-    if (__b == (_B(52612595, 52612481) + (0))) then
-        if false then
-            local __d1 = (_B(52617178, 52612481) + (0))
-
-            __d1 = (__d1 + (_B(52609251, 52612481) + (0)))
-        end
-
-        __b = (_B(52612600, 52612481) + (0))
-    end
-
-    if (__b == (_B(52612600, 52612481) + (0))) then
-        function O(T, U)
-            local P = a(T, (_B(52612480, 52612481) + (0)), (_B(52612483, 52612481) + (0)))
-
-            local op = a(U, (_B(52612480, 52612481) + (0)), (_B(52612490, 52612481) + (0)))
-
-            local A = a(T, (_B(52612482, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
-
-            local B, C, D = (_B(52612481, 52612481) + (0)), (_B(52612481, 52612481) + (0)), (_B(52612481, 52612481) + (0))
-
-            if (P == (_B(52612481, 52612481) + (0))) then
-                B = a(U, (_B(52612493, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
-
-                C = a(T, (_B(52612493, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
-
-                D = a(T, (_B(52612500, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
-            elseif (P == (_B(52612480, 52612481) + (0))) then
-                B = a(T, (_B(52612493, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
-
-                C = a(U, (_B(52612493, 52612481) + (0)), (_B(52612503, 52612481) + (0)))
-            elseif (P == (_B(52612483, 52612481) + (0))) then
-                B = a(T, (_B(52612493, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
-
-                C = (a(U, (_B(52612493, 52612481) + (0)), (_B(52612500, 52612481) + (0))) - (_B(53293694, 52612481) + (0)))
-            elseif (P == (_B(52612482, 52612481) + (0))) then
-                B = a(T, (_B(52612493, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
-
-                C = (a(U, (_B(52612493, 52612481) + (0)), (_B(52612500, 52612481) + (0))) - (_B(53293694, 52612481) + (0)))
-
-                D = a(T, (_B(52612500, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
-            end
-            return { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0B70")] = op, ["A"] = A, ["B"] = B, ["C"] = C, ["D"] = D, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("096F3DA2")] = P }
-        end
+    if (__b == (_B(52612470, 52612481) + (0))) then
+        local __d2 = ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11683BAA0467")
 
         __b = (_B(52612395, 52612481) + (0))
     end
 
     if (__b == (_B(52612395, 52612481) + (0))) then
-        function Q(aC)
-            local R = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
+        function H(data)
+            local I = { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = (_B(52612480, 52612481) + (0)) }
 
-            local S = {  }
-            for i = (_B(52612480, 52612481) + (0)), R do
-                local T = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
+            function J()
+                local b = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("06792DA2")](data, I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")])
 
-                local U = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
-
-                S[i] = O(T, U)
+                I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = (I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + (_B(52612480, 52612481) + (0)))
+                return b
             end
 
-            local V = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
+            function K()
+                local b0, b1, b2, b3 = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("06792DA2")](data, I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")], (I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + (_B(52612482, 52612481) + (0))))
 
-            local W = {  }
-            for i = (_B(52612480, 52612481) + (0)), V do
-                local X = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]()
+                I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = (I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + (_B(52612485, 52612481) + (0)))
+                return ((((b0 or (_B(52612481, 52612481) + (0))) + ((b1 or (_B(52612481, 52612481) + (0))) * (_B(52612225, 52612481) + (0)))) + ((b2 or (_B(52612481, 52612481) + (0))) * (_B(52678017, 52612481) + (0)))) + ((b3 or (_B(52612481, 52612481) + (0))) * (_B(35835265, 52612481) + (0))))
+            end
 
-                if (X == (_B(52612481, 52612481) + (0))) then
-                    W[i] = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17742B")]()
-                elseif (X == (_B(52612480, 52612481) + (0))) then
-                    W[i] = (aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]() ~= (_B(52612481, 52612481) + (0)))
+            function L()
+                local b0, b1, b2, b3, M, N, O, P = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("06792DA2")](data, I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")], (I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + (_B(52612486, 52612481) + (0))))
+
+                I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = (I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + (_B(52612489, 52612481) + (0)))
+
+                local Q = ((((b0 or (_B(52612481, 52612481) + (0))) + ((b1 or (_B(52612481, 52612481) + (0))) * (_B(52612225, 52612481) + (0)))) + ((b2 or (_B(52612481, 52612481) + (0))) * (_B(52678017, 52612481) + (0)))) + ((b3 or (_B(52612481, 52612481) + (0))) * (_B(35835265, 52612481) + (0))))
+
+                local R = ((((M or (_B(52612481, 52612481) + (0))) + ((N or (_B(52612481, 52612481) + (0))) * (_B(52612225, 52612481) + (0)))) + ((O or (_B(52612481, 52612481) + (0))) * (_B(52678017, 52612481) + (0)))) + ((P or (_B(52612481, 52612481) + (0))) * (_B(35835265, 52612481) + (0))))
+
+                local S = (((R >= (_B(2200096129, 52612481) + (4294967296))) and (- (_B(52612480, 52612481) + (0)))) or (_B(52612480, 52612481) + (0)))
+
+                local T = (R % (_B(2200096129, 52612481) + (4294967296)))
+
+                local U = math[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("026C36A81A")]((T / (_B(53661057, 52612481) + (0))))
+
+                local V = (T % (_B(53661057, 52612481) + (0)))
+
+                local W = ((V * (_B(52612481, 52612481) + (4294967296))) + Q)
+
+                if (U == (_B(52612481, 52612481) + (0))) then
+                    if (W == (_B(52612481, 52612481) + (0))) then
+                        return (S * (_B(52612481, 52612481) + (0)))
+                    end
+                    return ((S * W) * ((_B(52612483, 52612481) + (0)) ^ (- (_B(52611507, 52612481) + (0)))))
+                elseif (U == (_B(52611710, 52612481) + (0))) then
+                    if (W == (_B(52612481, 52612481) + (0))) then
+                        return (S * math[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0C753EA2")])
+                    end
+                    return ((_B(52612481, 52612481) + (0)) / (_B(52612481, 52612481) + (0)))
                 else
-                    W[i] = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("02366D")]()
+                    return ((S * ((_B(52612480, 52612481) + (0)) + (W * ((_B(52612483, 52612481) + (0)) ^ (- (_B(52612533, 52612481) + (0))))))) * ((_B(52612483, 52612481) + (0)) ^ (U - (_B(52612734, 52612481) + (0)))))
                 end
             end
 
-            local Y = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]()
+            function X()
+                local len = J()
 
-            local Z = (aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]() ~= (_B(52612481, 52612481) + (0)))
+                if (len == (_B(52612478, 52612481) + (0))) then
+                    len = K()
+                end
 
-            local aa = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
+                local s = string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](data, I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")], ((I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + len) - (_B(52612480, 52612481) + (0))))
 
-            local ab = {  }
-            for i = (_B(52612480, 52612481) + (0)), aa do
-                local ac = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
-
-                local ad = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")]()
-
-                local ae = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](ad, ac)
-
-                local af = r(ae)
-
-                ab[i] = Q(af)
-                aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17653CAC")]((ad + ac))
+                I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = (I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] + len)
+                return s
             end
-
-            local ag = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]()
-
-            local ah = {  }
-            for i = (_B(52612480, 52612481) + (0)), ag do
-                local ai = (aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]() ~= (_B(52612481, 52612481) + (0)))
-
-                local aj = aC[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]()
-
-                ah[i] = { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("027236AA377729AA0F63")] = ai, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E3DA210")] = aj }
-            end
-            return { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E2AB31A713EBF05670FBC")] = S, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076F37B41C6533BF1F")] = W, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B980E7133A818610EA103")] = ab, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("14612BA6055B3EA4196615")] = Y, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D7306B109763CB90B")] = Z, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11702FA6047138B8")] = ah }
+            return { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")] = J, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")] = K, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("02366D")] = L, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17742B")] = X, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = function()
+                                return I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")]
+            end, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17653CAC")] = function(p)
+                                I[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")] = p
+            end, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")] = function(aR, len)
+                                return string[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](data, aR, ((aR + len) - (_B(52612480, 52612481) + (0))))
+            end }
         end
-
-        __b = (_B(52612409, 52612481) + (0))
-    end
-
-    if (__b == (_B(52612409, 52612481) + (0))) then
-        local __d2 = ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11683BAA0467")
-
-        __b = (_B(52612381, 52612481) + (0))
-    end
-
-    if (__b == (_B(52612381, 52612481) + (0))) then
 
         __b = (_B(52612353, 52612481) + (0))
     end
@@ -339,165 +299,271 @@ while true do
     end
 
     if (__b == (_B(52612358, 52612481) + (0))) then
-        function ak(sub, aE, an, upvals, destReg)
-            local al = {  }
-            for i, uv in ipairs(sub[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11702FA6047138B8")]) do
-                if uv[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("027236AA377729AA0F63")] then
-                    al[i] = { ["v"] = an[uv[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E3DA210")]] }
+        function Y(ad, ae)
+            local Z = m(ad, (_B(52612480, 52612481) + (0)), (_B(52612483, 52612481) + (0)))
+
+            local op = m(ae, (_B(52612480, 52612481) + (0)), (_B(52612490, 52612481) + (0)))
+
+            local A = m(ad, (_B(52612482, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
+
+            local B, C, D = (_B(52612481, 52612481) + (0)), (_B(52612481, 52612481) + (0)), (_B(52612481, 52612481) + (0))
+
+            if (Z == (_B(52612481, 52612481) + (0))) then
+                B = m(ae, (_B(52612493, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
+
+                C = m(ad, (_B(52612493, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
+
+                D = m(ad, (_B(52612500, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
+            elseif (Z == (_B(52612480, 52612481) + (0))) then
+                B = m(ad, (_B(52612493, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
+
+                C = m(ae, (_B(52612493, 52612481) + (0)), (_B(52612503, 52612481) + (0)))
+            elseif (Z == (_B(52612483, 52612481) + (0))) then
+                B = m(ad, (_B(52612493, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
+
+                C = (m(ae, (_B(52612493, 52612481) + (0)), (_B(52612500, 52612481) + (0))) - (_B(53293694, 52612481) + (0)))
+            elseif (Z == (_B(52612482, 52612481) + (0))) then
+                B = m(ad, (_B(52612493, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
+
+                C = (m(ae, (_B(52612493, 52612481) + (0)), (_B(52612500, 52612481) + (0))) - (_B(53293694, 52612481) + (0)))
+
+                D = m(ad, (_B(52612500, 52612481) + (0)), (_B(52612488, 52612481) + (0)))
+            end
+            return { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0B70")] = op, ["A"] = A, ["B"] = B, ["C"] = C, ["D"] = D, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("096F3DA2")] = Z }
+        end
+
+        __b = (_B(52612428, 52612481) + (0))
+    end
+
+    if (__b == (_B(52612428, 52612481) + (0))) then
+        function aa(aO)
+            local ab = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
+
+            local ac = {  }
+            for i = (_B(52612480, 52612481) + (0)), ab do
+                local ad = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
+
+                local ae = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
+
+                ac[i] = Y(ad, ae)
+            end
+
+            local af = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
+
+            local ag = {  }
+            for i = (_B(52612480, 52612481) + (0)), af do
+                local ah = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]()
+
+                if (ah == (_B(52612481, 52612481) + (0))) then
+                    ag[i] = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17742B")]()
+                elseif (ah == (_B(52612480, 52612481) + (0))) then
+                    ag[i] = (aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]() ~= (_B(52612481, 52612481) + (0)))
                 else
-                    al[i] = upvals[(uv[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E3DA210")] + (_B(52612480, 52612481) + (0)))]
+                    ag[i] = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("02366D")]()
                 end
             end
 
-            local am = function(...)
-                                return vm_execute(sub, aE, al, { ... })
+            local ai = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]()
+
+            local aj = (aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]() ~= (_B(52612481, 52612481) + (0)))
+
+            local ak = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
+
+            local al = {  }
+            for i = (_B(52612480, 52612481) + (0)), ak do
+                local am = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11336B")]()
+
+                local an = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("146F2A")]()
+
+                local ao = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B")](an, am)
+
+                local ap = H(ao)
+
+                al[i] = aa(ap)
+                aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17653CAC")]((an + am))
             end
-            for i, uv in ipairs(sub[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11702FA6047138B8")]) do
-                if (uv[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("027236AA377729AA0F63")] and (uv[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E3DA210")] == destReg)) then
-                    al[i]["v"] = am
-                end
+
+            local aq = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]()
+
+            local ar = {  }
+            for i = (_B(52612480, 52612481) + (0)), aq do
+                local as = (aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]() ~= (_B(52612481, 52612481) + (0)))
+
+                local at = aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("1138")]()
+
+                ar[i] = { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("027236AA377729AA0F63")] = as, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E3DA210")] = at }
             end
-            return am
+            return { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E2AB31A713EBF05670FBC")] = ac, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076F37B41C6533BF1F")] = ag, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B980E7133A818610EA103")] = al, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("14612BA6055B3EA4196615")] = ai, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D7306B109763CB90B")] = aj, [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11702FA6047138B8")] = ar }
         end
 
         __b = (_B(52612442, 52612481) + (0))
     end
 
     if (__b == (_B(52612442, 52612481) + (0))) then
-        function vm_execute(aD, aE, upvals, args)
-            local an = {  }
 
-            local ao = (_B(52612480, 52612481) + (0))
+        __b = (_B(52612409, 52612481) + (0))
+    end
 
-            local code = aD[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E2AB31A713EBF05670FBC")]
-
-            local ap = aD[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076F37B41C6533BF1F")]
-
-            local aq = (# code)
-
-            if args then
-                for i = (_B(52612480, 52612481) + (0)), aD[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("14612BA6055B3EA4196615")] do
-                    an[(i - (_B(52612480, 52612481) + (0)))] = args[i]
+    if (__b == (_B(52612409, 52612481) + (0))) then
+        function au(sub, aQ, ax, upvals, destReg)
+            local av = {  }
+            for i, uv in ipairs(sub[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11702FA6047138B8")]) do
+                if uv[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("027236AA377729AA0F63")] then
+                    av[i] = { ["v"] = ax[uv[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E3DA210")]] }
+                else
+                    av[i] = upvals[(uv[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E3DA210")] + (_B(52612480, 52612481) + (0)))]
                 end
             end
-            while (ao <= aq) do
-                local ar = code[ao]
 
-                local op = ar[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0B70")]
+            local aw = function(...)
+                                return vm_execute(sub, aQ, av, { ... })
+            end
+            for i, uv in ipairs(sub[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("11702FA6047138B8")]) do
+                if (uv[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("027236AA377729AA0F63")] and (uv[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E3DA210")] == destReg)) then
+                    av[i]["v"] = aw
+                end
+            end
+            return aw
+        end
 
-                local A, B, C, D = ar["A"], ar["B"], ar["C"], ar["D"]
+        __b = (_B(52612367, 52612481) + (0))
+    end
+
+    if (__b == (_B(52612367, 52612481) + (0))) then
+        function vm_execute(aP, aQ, upvals, args)
+            local ax = {  }
+
+            local ay = (_B(52612480, 52612481) + (0))
+
+            local code = aP[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0D6E2AB31A713EBF05670FBC")]
+
+            local az = aP[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("076F37B41C6533BF1F")]
+
+            local aA = (# code)
+
+            if args then
+                for i = (_B(52612480, 52612481) + (0)), aP[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("14612BA6055B3EA4196615")] do
+                    ax[(i - (_B(52612480, 52612481) + (0)))] = args[i]
+                end
+            end
+            while (ay <= aA) do
+                local aB = code[ay]
+
+                local op = aB[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("0B70")]
+
+                local A, B, C, D = aB["A"], aB["B"], aB["C"], aB["D"]
 
                 if ((op == (_B(52612481, 52612481) + (0))) or (op == (_B(52612499, 52612481) + (0)))) then
-                    an[A] = ((an[B] or (_B(52612481, 52612481) + (0))) + (ap[(C + (_B(52612480, 52612481) + (0)))] or (_B(52612481, 52612481) + (0))))
+                    ax[A] = ((ax[B] or (_B(52612481, 52612481) + (0))) + (az[(C + (_B(52612480, 52612481) + (0)))] or (_B(52612481, 52612481) + (0))))
                 elseif ((op == (_B(52612506, 52612481) + (0))) or (op == (_B(52612539, 52612481) + (0)))) then
-                    an[A] = ((an[B] or (_B(52612481, 52612481) + (0))) + (an[C] or (_B(52612481, 52612481) + (0))))
+                    ax[A] = ((ax[B] or (_B(52612481, 52612481) + (0))) + (ax[C] or (_B(52612481, 52612481) + (0))))
                 elseif ((op == (_B(52612521, 52612481) + (0))) or (op == (_B(52612528, 52612481) + (0)))) then
-                    an[A] = ((an[B] or (_B(52612481, 52612481) + (0))) - (an[C] or (_B(52612481, 52612481) + (0))))
+                    ax[A] = ((ax[B] or (_B(52612481, 52612481) + (0))) - (ax[C] or (_B(52612481, 52612481) + (0))))
                 elseif (op == (_B(52612538, 52612481) + (0))) then
-                    an[A] = ((an[B] or (_B(52612481, 52612481) + (0))) * (an[C] or (_B(52612481, 52612481) + (0))))
+                    ax[A] = ((ax[B] or (_B(52612481, 52612481) + (0))) * (ax[C] or (_B(52612481, 52612481) + (0))))
                 elseif (op == (_B(52612547, 52612481) + (0))) then
-                    an[A] = ((an[B] or (_B(52612481, 52612481) + (0))) / (an[C] or (_B(52612481, 52612481) + (0))))
+                    ax[A] = ((ax[B] or (_B(52612481, 52612481) + (0))) / (ax[C] or (_B(52612481, 52612481) + (0))))
                 elseif ((op == (_B(52612494, 52612481) + (0))) or (op == (_B(52612505, 52612481) + (0)))) then
-                    an[A] = ((an[B] or (_B(52612481, 52612481) + (0))) % (an[C] or (_B(52612481, 52612481) + (0))))
+                    ax[A] = ((ax[B] or (_B(52612481, 52612481) + (0))) % (ax[C] or (_B(52612481, 52612481) + (0))))
                 elseif ((op == (_B(52612510, 52612481) + (0))) or (op == (_B(52612527, 52612481) + (0)))) then
-                    an[A] = ((an[B] or (_B(52612481, 52612481) + (0))) % (ap[(C + (_B(52612480, 52612481) + (0)))] or (_B(52612481, 52612481) + (0))))
+                    ax[A] = ((ax[B] or (_B(52612481, 52612481) + (0))) % (az[(C + (_B(52612480, 52612481) + (0)))] or (_B(52612481, 52612481) + (0))))
                 elseif (op == (_B(52612559, 52612481) + (0))) then
-                    an[A] = ((an[B] or (_B(52612481, 52612481) + (0))) ^ (an[C] or (_B(52612481, 52612481) + (0))))
+                    ax[A] = ((ax[B] or (_B(52612481, 52612481) + (0))) ^ (ax[C] or (_B(52612481, 52612481) + (0))))
                 elseif ((op == (_B(52612553, 52612481) + (0))) or (op == (_B(52612561, 52612481) + (0)))) then
-                    an[A] = (an[B] == an[C])
+                    ax[A] = (ax[B] == ax[C])
                 elseif (op == (_B(52612552, 52612481) + (0))) then
-                    an[A] = (an[B] ~= an[C])
+                    ax[A] = (ax[B] ~= ax[C])
                 elseif (op == (_B(52612555, 52612481) + (0))) then
-                    an[A] = (an[B] < an[C])
+                    ax[A] = (ax[B] < ax[C])
                 elseif (op == (_B(52612554, 52612481) + (0))) then
-                    an[A] = (an[B] <= an[C])
+                    ax[A] = (ax[B] <= ax[C])
                 elseif (op == (_B(52612557, 52612481) + (0))) then
-                    an[A] = (an[B] > an[C])
+                    ax[A] = (ax[B] > ax[C])
                 elseif (op == (_B(52612556, 52612481) + (0))) then
-                    an[A] = (an[B] >= an[C])
+                    ax[A] = (ax[B] >= ax[C])
                 elseif ((op == (_B(52612487, 52612481) + (0))) or (op == (_B(52612511, 52612481) + (0)))) then
-                    an[A] = an[B]
+                    ax[A] = ax[B]
                 elseif ((op == (_B(52612519, 52612481) + (0))) or (op == (_B(52612537, 52612481) + (0)))) then
-                    an[A] = ap[(B + (_B(52612480, 52612481) + (0)))]
+                    ax[A] = az[(B + (_B(52612480, 52612481) + (0)))]
                 elseif ((op == (_B(52612493, 52612481) + (0))) or (op == (_B(52612522, 52612481) + (0)))) then
                     if (C == (_B(52612483, 52612481) + (0))) then
-                        an[A] = {  }
+                        ax[A] = {  }
                     else
-                        an[A] = (C ~= (_B(52612481, 52612481) + (0)))
+                        ax[A] = (C ~= (_B(52612481, 52612481) + (0)))
                     end
                 elseif ((op == (_B(52612512, 52612481) + (0))) or (op == (_B(52612533, 52612481) + (0)))) then
-                    an[A] = (# an[B])
+                    ax[A] = (# ax[B])
                 elseif ((op == (_B(52612507, 52612481) + (0))) or (op == (_B(52612535, 52612481) + (0)))) then
-                    local s = an[B]
+                    local s = ax[B]
                     for i = (B + (_B(52612480, 52612481) + (0))), D do
-                        s = (s .. an[i])
+                        s = (s .. ax[i])
                     end
 
-                    an[A] = s
+                    ax[A] = s
                 elseif ((op == (_B(52612482, 52612481) + (0))) or (op == (_B(52612526, 52612481) + (0)))) then
-                    an[(A + (_B(52612480, 52612481) + (0)))] = an[B]
+                    ax[(A + (_B(52612480, 52612481) + (0)))] = ax[B]
 
-                    an[A] = an[B][ap[(C + (_B(52612480, 52612481) + (0)))]]
+                    ax[A] = ax[B][az[(C + (_B(52612480, 52612481) + (0)))]]
                 elseif ((op == (_B(52612504, 52612481) + (0))) or (op == (_B(52612546, 52612481) + (0)))) then
-                    an[A] = an[B][ap[(C + (_B(52612480, 52612481) + (0)))]]
+                    ax[A] = ax[B][az[(C + (_B(52612480, 52612481) + (0)))]]
                 elseif (op == (_B(52612558, 52612481) + (0))) then
-                    an[A] = an[B][an[C]]
+                    ax[A] = ax[B][ax[C]]
                 elseif (op == (_B(52612548, 52612481) + (0))) then
-                    an[A][ap[(B + (_B(52612480, 52612481) + (0)))]] = an[C]
+                    ax[A][az[(B + (_B(52612480, 52612481) + (0)))]] = ax[C]
                 elseif (op == (_B(52612560, 52612481) + (0))) then
-                    an[A][an[B]] = an[C]
+                    ax[A][ax[B]] = ax[C]
                 elseif ((((op == (_B(52612489, 52612481) + (0))) or (op == (_B(52612501, 52612481) + (0)))) or (op == (_B(52612502, 52612481) + (0)))) or (op == (_B(52612545, 52612481) + (0)))) then
-                    an[A] = aE[ap[(B + (_B(52612480, 52612481) + (0)))]]
+                    ax[A] = aQ[az[(B + (_B(52612480, 52612481) + (0)))]]
                 elseif ((op == (_B(52612532, 52612481) + (0))) or (op == (_B(52612541, 52612481) + (0)))) then
-                    aE[ap[(B + (_B(52612480, 52612481) + (0)))]] = an[A]
+                    aQ[az[(B + (_B(52612480, 52612481) + (0)))]] = ax[A]
                 elseif ((op == (_B(52612483, 52612481) + (0))) or (op == (_B(52612503, 52612481) + (0)))) then
-                    local sub = aD[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B980E7133A818610EA103")][(B + (_B(52612480, 52612481) + (0)))]
+                    local sub = aP[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B980E7133A818610EA103")][(B + (_B(52612480, 52612481) + (0)))]
 
-                    an[A] = ak(sub, aE, an, upvals, A)
+                    ax[A] = au(sub, aQ, ax, upvals, A)
                 elseif ((op == (_B(52612509, 52612481) + (0))) or (op == (_B(52612516, 52612481) + (0)))) then
-                    local sub = aD[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B980E7133A818610EA103")][(B + (_B(52612480, 52612481) + (0)))]
+                    local sub = aP[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("17753B980E7133A818610EA103")][(B + (_B(52612480, 52612481) + (0)))]
 
-                    an[A] = ak(sub, aE, an, upvals, A)
+                    ax[A] = au(sub, aQ, ax, upvals, A)
                 elseif (op == (_B(52612563, 52612481) + (0))) then
-                    an[A] = upvals[(B + (_B(52612480, 52612481) + (0)))]["v"]
+                    ax[A] = upvals[(B + (_B(52612480, 52612481) + (0)))]["v"]
                 elseif (op == (_B(52612562, 52612481) + (0))) then
-                    upvals[(B + (_B(52612480, 52612481) + (0)))]["v"] = an[A]
+                    upvals[(B + (_B(52612480, 52612481) + (0)))]["v"] = ax[A]
                 elseif (op == (_B(52612495, 52612481) + (0))) then
-                    local callee = an[A]
+                    local callee = ax[A]
 
-                    local as
+                    local aC
 
                     if (B == (_B(52612481, 52612481) + (0))) then
-                        as = { callee() }
+                        aC = { callee() }
                     else
                         local call_args = {  }
                         for i = (_B(52612480, 52612481) + (0)), B do
-                            call_args[i] = an[(A + i)]
+                            call_args[i] = ax[(A + i)]
                         end
 
-                        as = { callee(unpack(call_args)) }
+                        aC = { callee(unpack(call_args)) }
                     end
 
                     if (C >= (_B(52612480, 52612481) + (0))) then
                         for i = (_B(52612480, 52612481) + (0)), C do
-                            an[((A + i) - (_B(52612480, 52612481) + (0)))] = as[i]
+                            ax[((A + i) - (_B(52612480, 52612481) + (0)))] = aC[i]
                         end
                     end
                 elseif ((op == (_B(52612508, 52612481) + (0))) or (op == (_B(52612529, 52612481) + (0)))) then
-                    local callee = an[A]
+                    local callee = ax[A]
 
                     local call_args = {  }
                     for i = (_B(52612480, 52612481) + (0)), B do
-                        call_args[i] = an[(A + i)]
+                        call_args[i] = ax[(A + i)]
                     end
 
-                    an[A] = callee(unpack(call_args))
+                    ax[A] = callee(unpack(call_args))
                 elseif ((op == (_B(52612492, 52612481) + (0))) or (op == (_B(52612496, 52612481) + (0)))) then
-                    local callee = an[A]
+                    local callee = ax[A]
 
                     local call_args = {  }
                     for i = (_B(52612480, 52612481) + (0)), B do
-                        call_args[i] = an[(A + i)]
+                        call_args[i] = ax[(A + i)]
                     end
                     return callee(unpack(call_args))
                 elseif ((op == (_B(52612534, 52612481) + (0))) or (op == (_B(52612549, 52612481) + (0)))) then
@@ -505,60 +571,60 @@ while true do
                 elseif ((op == (_B(52612525, 52612481) + (0))) or (op == (_B(52612524, 52612481) + (0)))) then
                     local ret_vals = {  }
                     for i = (_B(52612480, 52612481) + (0)), (C - (_B(52612480, 52612481) + (0))) do
-                        ret_vals[i] = an[((A + i) - (_B(52612480, 52612481) + (0)))]
+                        ret_vals[i] = ax[((A + i) - (_B(52612480, 52612481) + (0)))]
                     end
                     return unpack(ret_vals)
                 elseif ((op == (_B(52612517, 52612481) + (0))) or (op == (_B(52612530, 52612481) + (0)))) then
                     local ret_vals = {  }
                     for i = (_B(52612480, 52612481) + (0)), (C - (_B(52612480, 52612481) + (0))) do
-                        ret_vals[i] = an[((A + i) - (_B(52612480, 52612481) + (0)))]
+                        ret_vals[i] = ax[((A + i) - (_B(52612480, 52612481) + (0)))]
                     end
                     return unpack(ret_vals)
                 elseif ((op == (_B(52612486, 52612481) + (0))) or (op == (_B(52612536, 52612481) + (0)))) then
-                    ao = ((ao + C) - (_B(52612480, 52612481) + (0)))
+                    ay = ((ay + C) - (_B(52612480, 52612481) + (0)))
                 elseif (op == (_B(52612543, 52612481) + (0))) then
-                    if (not an[A]) then
-                        ao = ((ao + C) - (_B(52612480, 52612481) + (0)))
+                    if (not ax[A]) then
+                        ay = ((ay + C) - (_B(52612480, 52612481) + (0)))
                     end
                 elseif ((op == (_B(52612515, 52612481) + (0))) or (op == (_B(52612523, 52612481) + (0)))) then
-                    if (an[A] == ap[(C + (_B(52612480, 52612481) + (0)))]) then
+                    if (ax[A] == az[(C + (_B(52612480, 52612481) + (0)))]) then
                     else
-                        ao = ((ao + C) - (_B(52612480, 52612481) + (0)))
+                        ay = ((ay + C) - (_B(52612480, 52612481) + (0)))
                     end
                 elseif (op == (_B(52612551, 52612481) + (0))) then
-                    if (an[A] < an[B]) then
+                    if (ax[A] < ax[B]) then
                     else
-                        ao = ((ao + C) - (_B(52612480, 52612481) + (0)))
+                        ay = ((ay + C) - (_B(52612480, 52612481) + (0)))
                     end
                 elseif (op == (_B(52612550, 52612481) + (0))) then
-                    if (an[A] <= an[B]) then
+                    if (ax[A] <= ax[B]) then
                     else
-                        ao = ((ao + C) - (_B(52612480, 52612481) + (0)))
+                        ay = ((ay + C) - (_B(52612480, 52612481) + (0)))
                     end
                 elseif ((op == (_B(52612491, 52612481) + (0))) or (op == (_B(52612540, 52612481) + (0)))) then
-                    if (not an[B]) then
+                    if (not ax[B]) then
                     else
-                        an[A] = an[B]
+                        ax[A] = ax[B]
 
-                        ao = ((ao + C) - (_B(52612480, 52612481) + (0)))
+                        ay = ((ay + C) - (_B(52612480, 52612481) + (0)))
                     end
                 elseif ((op == (_B(52612513, 52612481) + (0))) or (op == (_B(52612520, 52612481) + (0)))) then
-                    an[A] = ((an[A] or (_B(52612481, 52612481) + (0))) - (an[(A + (_B(52612483, 52612481) + (0)))] or (_B(52612481, 52612481) + (0))))
+                    ax[A] = ((ax[A] or (_B(52612481, 52612481) + (0))) - (ax[(A + (_B(52612483, 52612481) + (0)))] or (_B(52612481, 52612481) + (0))))
 
-                    ao = ((ao + C) - (_B(52612480, 52612481) + (0)))
+                    ay = ((ay + C) - (_B(52612480, 52612481) + (0)))
                 elseif ((op == (_B(52612500, 52612481) + (0))) or (op == (_B(52612544, 52612481) + (0)))) then
-                    an[A] = ((an[A] or (_B(52612481, 52612481) + (0))) + (an[(A + (_B(52612483, 52612481) + (0)))] or (_B(52612481, 52612481) + (0))))
+                    ax[A] = ((ax[A] or (_B(52612481, 52612481) + (0))) + (ax[(A + (_B(52612483, 52612481) + (0)))] or (_B(52612481, 52612481) + (0))))
 
-                    local at = (an[(A + (_B(52612483, 52612481) + (0)))] or (_B(52612481, 52612481) + (0)))
+                    local aD = (ax[(A + (_B(52612483, 52612481) + (0)))] or (_B(52612481, 52612481) + (0)))
 
-                    local au = (an[(A + (_B(52612480, 52612481) + (0)))] or (_B(52612481, 52612481) + (0)))
+                    local aE = (ax[(A + (_B(52612480, 52612481) + (0)))] or (_B(52612481, 52612481) + (0)))
 
-                    local av = (((at >= (_B(52612481, 52612481) + (0))) and (an[A] <= au)) or ((at < (_B(52612481, 52612481) + (0))) and (an[A] >= au)))
+                    local aF = (((aD >= (_B(52612481, 52612481) + (0))) and (ax[A] <= aE)) or ((aD < (_B(52612481, 52612481) + (0))) and (ax[A] >= aE)))
 
-                    if av then
-                        an[(A + (_B(52612482, 52612481) + (0)))] = an[A]
+                    if aF then
+                        ax[(A + (_B(52612482, 52612481) + (0)))] = ax[A]
 
-                        ao = ((ao + C) - (_B(52612480, 52612481) + (0)))
+                        ay = ((ay + C) - (_B(52612480, 52612481) + (0)))
                     end
                 elseif ((op == (_B(52612480, 52612481) + (0))) or (op == (_B(52612484, 52612481) + (0)))) then
                     error(((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("22550A822C5B098A2544228E3C403A85353007B80C341EAE0C681EADF47911C3ED4E5991B80A49CBFE5DEF9BF941E0"))
@@ -573,10 +639,10 @@ while true do
                 elseif ((op == (_B(52612498, 52612481) + (0))) or (op == (_B(52612542, 52612481) + (0)))) then
                     error(((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("22550A822C5B1A8E384E288A3C483A90355C25883B5B23983D4C51B1EF685590F1500988FA50188FAC41EFCFE61CABC7B442FC99EC5DE09E"))
                 else
-                    error((((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("324D63E71D6A36A5037F0FEF1F7C06BC107549") .. (tostring(op) .. (((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("44612DE7017460") .. tostring(ao)))))
+                    error((((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("324D63E71D6A36A5037F0FEF1F7C06BC107549") .. (tostring(op) .. (((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("44612DE7017460") .. tostring(ay)))))
                 end
 
-                ao = (ao + (_B(52612480, 52612481) + (0)))
+                ay = (ay + (_B(52612480, 52612481) + (0)))
             end
         end
 
@@ -584,38 +650,67 @@ while true do
     end
 
     if (__b == (_B(52612372, 52612481) + (0))) then
-        aw = ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("50336DFF5C3169FE5830558A4448519141215CE64C50599F485E44E8B52E40DBB1184CD3BD1C48DCB96CB4ABA56DB0B2A173BCB3AE07BBCDAA08A7C9960BA3319272AF33917DAB3C9A0C984C860D922383619F538E109B5D8A1EF029F76E821B85588E13FF508A1CFB5F831EE72DFD03EC40FE74EF32FA7DE44DE909D84DED75DCB4E171D0BCE57CD4B1D90BC8CDDD11B0A2D113C0D2D51DC5A8C86D39A4CC513D92C053319CC45C3590452C29ED3C305583303321F1493D5D88504E65FD54B165F458B2698659C96DF060CC748E64D175936CAF79916CDE7AE973AF02EC779106D37B920AA678E9")
+        aG = ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("503361F25C3169FE5830558A4448519141215CE64C50599F492844EFB52E40D0B1194CDEBD1148AFB91FB4A9A56DB3C3A176BCB4A072B8BDAA0DA7CA960DAC319274AF469E05AB3C9A7FE037860D935682159F548E179B5D8B69F05EF76E821B85578E12FF268A6AFB5FF66BE72DFD03EC40FE749A47FA7DE44DE90AD84EED7BDCC2E172D0C6E50AD4BFD909C8B5A163CCD3D065C1A5D51DC5A8C86839ADB1533D94C026319DC45C35EC422A29ED44432DF6303321F0493E5D88504F618854B065F95DC269F25CC868F160B6718A60D775936BA47AE56CDD7EED74DC02ED779206D47B930DA27F9C0EAC079712D5078A16B30A841BC50FFE1EBD128F26C916F027411FF02B321E885C3022F6334A54E137522A953B502E9D382835E9C42A31D0C01349A1CC1239A8C86AC5D6D46AB4C6D073CCC5DD06C9BEAE0BD4CEE50BA732E174DC46ED05D83CE97F933DF50DE3228663EC53FE679E29FA68F7298669F3108254FF148E52FB6FFE2E8716E05C830A92328F759E318B7EEF3EE10ED04BE102D4B4E971DBC2ED7DDCC9D176C0CAD111C4D3D865CDA6DD1DCDADC06931AEC45B35E1C85239E7CC533D903029259E343126823C4029F13F4E29FB234E128427BA16F42BC51EF12FBC1E8C13CC028D16A201931BD30BE01EAD0FE802A773E5069077A10E9E7BD10E9E7FD072EA68DC76F160C171826BB1798F6BCE658E54CB6DF150346DF15F4269FC584D59FD444D50E340565D944D27599D492F499AB52E40A2BD134CD3BD1048DCB96DB8DBA56DB3C3AD05BCB3AE01CCC9AA08A7CF997FA3309273A0429E72AB489A719736860EE42082139E258F679B5D8A1EF329F76E821BF3588E12FF26FF1FFB50F66AE728F271EC438A07EF31F50FE44CE90ED84E977ADCB4E173ABB3E57DD4BED977C8C8DD11CCD4D111C0D1D46BC5ACC86E39AEB15A3D94C0513192C45C3591382929953C4A2DF2303121F1343D598B504E618F54C265F458B26DF25CBC6DF067BE718D61D276E268D479976CDD7EEB74AD02EE779001A27B920AD17B930ED0049716D407F116B60CF21AB10FFD1ABA128E26CD65F627341A842B461EFD2F3E22F6334955EB37532DE73E512E9E3F5D35EFC42D31D0C0623DA6")
+
+        __b = (_B(52612465, 52612481) + (0))
+    end
+
+    if (__b == (_B(52612465, 52612481) + (0))) then
+        aH = ((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("53371AF5593664FF5F4C518B3439239143262BE639525EEF3A5B359BB12542A0B1124BA4B1674CAABF6BB8AED41AB6C3AC74CBC5DB75BFB8DD79D3CEE37AD735E703AC459D02DC4F9C79923A8579E62A81659E558062EC22F96F812EF71E821081258863FF57FF688D2B8269E45BFC0B9031F9019B43FF7EED4EE307D238E272D2B1EF76DBC0980FA8BEA57CB3B9D465C4D4DB16CAA1A86ECDA1C81A43A9C7553698CA573FE1BE294F99332922EE443751854D4E288D3D4B2D8A254A65F824B760842EC3118524BF6A8B67B804FA17A470E468D20FE415DD099A07AA01990CE674A108977FD7799A09AA729911DD04816DC4798260C4758D1DC061FE58CB138126396EF45B4568F92F3D578E453423E6305528954F235C9E4B5B349BB52A41DBC5163BD1C9164BD9B41CB2AED21BBCC5A075CDC4A907B8C3AC01A5C6970DD33B9072AD339E75AF339809E73A870A925582689D27F9109E5AFA6F805BF8658466F657FC16F827841BF550801BE45884719247F8769C328C0A9A4EE80BD639EC73A1B7ED7EDFC69B73DEB0D00CB2C8A06AB6D6AD64BAA4DD19BAA9B21E44ACCD5A3C95C0524992C92D3BE93758299F37322C883E435B834E482DFD214A18F953B711F529C41D8625C81C8D62CA02FC10A40D946CD27AED1DDE0E9E04AC71E4769575D57FE50ADD0E9B7FDB719A62D9048264B30C856DB609FF1AC1138E22CC10F4543269F35C306B885A4C558C454D269040282DE34E555F983F5C40EAC55F43A5C2163FD7BE114DD3CE11B0DFA515B7B7A472CAC7AC76BDBFAF0DA3C6E47ED3409C70A8309976A433EA78944981759C56F062EA20FD109B2E8D68F027F918F461F0248F148C20FE19F82B8019E954F005E540F103EE46FE0D9F4AE30BD749E072D5B09870AEB6EB73DFB9A57FB4B5DD12C5D4DF61CAA2DE6DCAAEC81D37D9B0253793C82139E6CE293A90335F5298463550F13E4F5E85394C2588274D618823B31CF12EB46DF05FB2688C62BD04F41CA0029110D100E469D90DEC74AE79EE059600D27D967FD20C9E75AB72EA60DA768166B20A866AC17B8A1A")
+
+        __b = (_B(52612386, 52612481) + (0))
+    end
+
+    if (__b == (_B(52612386, 52612481) + (0))) then
+        local __d4 = ((_B(52613257, 52612481) + (0)) + (_B(52612930, 52612481) + (0)))
 
         __b = (_B(52612581, 52612481) + (0))
     end
 
     if (__b == (_B(52612581, 52612481) + (0))) then
-        ax = (_B(52612496, 52612481) + (0))
+        aI = (_B(52612496, 52612481) + (0))
 
-        __b = (_B(52612400, 52612481) + (0))
+        __b = (_B(52612423, 52612481) + (0))
     end
 
-    if (__b == (_B(52612400, 52612481) + (0))) then
-        function ay()
-            local az = e(aw)
+    if (__b == (_B(52612423, 52612481) + (0))) then
+        function aJ()
+            local aK = aG
 
-            local aA = f(az, ax)
+            if e() then
+                aK = aH
+            end
 
-            local aB = g(aA)
+            local aL = q(aK)
 
-            local aC = r(aB)
+            local aM = r(aL, aI)
 
-            local aD = Q(aC)
+            local aN = t(aM)
 
-            local aE = setmetatable({  }, { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("3B5F30A90C6125")] = _G })
-            vm_execute(aD, aE, {  }, {  })
+            local aO = H(aN)
+
+            local aP = aa(aO)
+
+            local aQ = setmetatable({  }, { [((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("3B5F30A90C6125")] = _G })
+            a(aL)
+            a(aM)
+            a(aN)
+            pcall(function()
+                                aO[((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)({196,100,255,87}))("177438B30D")] = nil
+            end)
+            a(aO)
+            d()
+            vm_execute(aP, aQ, {  }, {  })
+            a(aP)
+            a(aQ)
+            d()
         end
 
-        __b = (_B(52612428, 52612481) + (0))
+        __b = (_B(52612456, 52612481) + (0))
     end
 
-    if (__b == (_B(52612428, 52612481) + (0))) then
-        ay()
+    if (__b == (_B(52612456, 52612481) + (0))) then
+        aJ()
 
         __b = (_B(4242354814, 52612481) + (0))
     end
