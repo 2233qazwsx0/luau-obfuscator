@@ -1,0 +1,246 @@
+# luau-obfuscator · v0.4 (in progress)
+
+A high-strength Luau (Roblox-flavor) obfuscator. **v0.2 adds control-flow
+flattening (D4) and dead-code injection (D5)** on top of the v0.1 foundation:
+identifier renaming, bitxor-ed numbers, XOR-encrypted strings, and a
+dispatch-state-machine that shuffles top-level statement order behind a
+`while true do` loop.
+
+**v0.3–v0.4 adds a full bytecode VM compiler + Luau runtime template** that
+faithfully mirrors the reference sample's custom interpreter, LZW compression,
+position-dependent XOR cipher, and 70-op dispatch loop. The obfuscated output
+runs on any Luau 0.x runtime (Roblox Studio, Roblox client, luau-cli).
+
+## Status: v0.2 baseline stable ✅ — v0.3 VM compiler complete ✅ — v0.4 runtime template in progress
+
+**v0.2 baseline** (verified end-to-end with Luau 0.601):
+- 66/66 tests passing, `tsc --noEmit` zero errors
+- Round-trip verified across 8 seeds (1, 7, 42, 100, 999, 2024, 12345, 67890)
+- CJK string support confirmed
+
+**v0.3 VM compiler** (new, complete):
+- 70-op register-based VM, faithfully mirrors reference sample's `bv`-style dispatch
+- Opcode alias system: ~35 unique semantics mapped to 70 dispatch numbers
+- 5-10 fused compound ops for anti-analysis
+- Instruction encoding: dual 32-bit `(b8, b9)` format with 4 encoding modes
+- Function prototype tree: instructions, constants, sub-functions, upvalues
+- LZW compression + position-dependent XOR encryption
+- AST → bytecode compiler with register allocation, jump patching, sub-function support
+- All v0.3 modules compile clean: `tsc --noEmit` zero errors
+
+**v0.4 Luau runtime template** (in progress):
+- ~6000 LoC interpreter shell for decoding + running bytecode
+- Required for obfuscated output to run on Roblox without `--vm`
+- 70-op dispatch loop, LZW decoder, XOR stream cipher, IEEE754 decoder
+- Hand-written Luau source as TS template string
+
+```
+$ /opt/luau/build/luau examples/hello.lua
+hello world #1
+hello world #2
+hello world #3
+1 + 2 = 3
+starts with h
+
+$ node dist/src/cli/obfuscate.js -i examples/hello.lua -o /tmp/hello.obf.lua --seed 42
+$ /opt/luau/build/luau /tmp/hello.obf.lua
+hello world #1
+hello world #2
+hello world #3
+1 + 2 = 3
+starts with h
+```
+
+Round-trip was tested against **8 different seeds** (1, 7, 42, 100, 999,
+2024, 12345, 67890) and produced identical output for all of them.
+
+v0.2 flatten + deadcode verification (CJK strings, `--seed 42`):
+
+```
+$ node dist/src/cli/obfuscate.js -i /tmp/test_cn.lua -o /tmp/test_cn.obf.lua --seed 42
+$ /opt/luau/build/luau /tmp/test_cn.obf.lua
+cn中国，，，。。。!-:（~）
+中文中文
+```
+
+D5 deadcode injection verified: dead code blocks are correctly injected,
+preserved through flattening, and do not affect program semantics.
+
+## What this project is
+
+The reference for "high strength" is the obfuscated Luau sample
+`[混淆加密]猫猫脚本 114514.txt` (~159 KB). That sample combines six techniques:
+
+1. **Custom bytecode VM** — a register-stack interpreter with ~60 opcodes.
+2. **LZW string compression + XOR stream cipher** for all string literals.
+3. **bitxor obfuscation** of every numeric literal.
+4. **32-entry dispatch table** that indices strings, globals, ops, and constants.
+5. **Multi-layer indirect calls** via index expressions over a global array.
+6. **Closure / env reflection** — `_ENV`, `getfenv`, `setfenv` re-wired.
+
+A local trimmed version of the reference lives in [examples/reference.lua](./examples/reference.lua).
+A hand-rolled slice that mirrors the 32-entry dispatch and XOR style lives in
+[examples/reference-slice.lua](./examples/reference-slice.lua).
+
+This v0.2 implements (3), partial (2) (XOR only, no LZW), and partial (5)
+(identifier renaming for locals; globals are left intact for engine-visibility),
+plus (4) at the AST level: top-level control-flow flattening via a dispatch
+state machine. The heavy pieces (1, 6) and the bytecode-level dispatch are
+scoped in TODO.md to be implemented in subsequent milestones.
+
+## What v0.2 actually does
+
+| Pass                | Module                       | Strength gained                                    |
+|---------------------|------------------------------|----------------------------------------------------|
+| **D1 Rename**       | `transforms/identifier.ts`   | Locals → `a`/`b`/`c`/...; globals (engine-visible) are preserved. |
+| **D2 Number XOR**   | `pipeline/obfuscate.ts` (AST walk) | `42` → `(bit32.bxor(K, N0) + (42-N0))`. Per-instance 32-bit key, deterministic from PRNG seed. |
+| **D3 String XOR**   | `pipeline/obfuscate.ts` (AST walk) | For strings ≥ 3 chars: emit inline IIFE `((function(K) ... end)("KEYHEX"))("HEX")`. |
+| **D4 Flatten**      | `ir/flatten.ts` + `ir/ir.ts` | Top-level block split into dispatch states; `while true do if __b == S then ... end` with shuffled state IDs. |
+| **D5 Deadcode**     | `transforms/deadcode.ts`     | Injects unreachable `if false then` branches and dead `local __dX = <expr>` variables before D4 flattening. 30-50% probability, 50% cap. |
+
+The pipeline string-renders the obfuscated AST back into Luau that should
+`loadstring()` cleanly on any Luau 0.x runtime (Roblox Studio, Roblox
+client, luau-cli ≥0.601).
+
+## How to run
+
+### Prerequisites
+
+- **Node.js ≥ 18.17**
+- **npm** (any version with npm ≥ 9)
+
+### Setup
+
+```bash
+npm install
+npm run build       # → dist/
+```
+
+### CLI usage
+
+```bash
+# Smoke test (v0.2 AST-level obfuscation):
+npx luau-obfuscate -i examples/hello.lua -o /tmp/hello.obf.lua --seed 42
+
+# With minify (single line):
+npx luau-obfuscate -i examples/hello.lua -o /tmp/hello.obf.lua --seed 42 --minify
+
+# VM mode (v0.3+ — bytecode + runtime, runs on Roblox):
+npx luau-obfuscate -i examples/hello.lua -o /tmp/hello.vm.lua --seed 42 --vm
+
+# Pick what runs:
+npx luau-obfuscate -i examples/hello.lua -o /tmp/hello.obf.lua \
+                    --no-flatten             # skip D4
+npx luau-obfuscate -i examples/hello.lua -o /tmp/hello.obf.lua \
+                    --no-deadcode            # skip D5
+npx luau-obfuscate -i examples/hello.lua -o /tmp/hello.obf.lua \
+                    --no-numbers            # skip D2
+npx luau-obfuscate -i examples/hello.lua -o /tmp/hello.obf.lua \
+                    --no-strings --no-numbers   # D1 only
+```
+
+### Run tests
+
+```bash
+npm test
+```
+
+The tests cover:
+- Lexer smoke tests (`tests/lexer.test.ts`)
+- Pipeline end-to-end (`tests/obfuscate.test.ts`) — different seeds → different output; identifier renames; string XOR blob substitution; engine-visible names preserved; small programs survive.
+- Cipher roundtrip (`tests/roundtrip.test.ts`) — encrypt → decrypt identity.
+- Control-flow flattening (`tests/flatten.test.ts`) — IR block splitting; deterministic state-ID shuffle; dispatch-structure emission; local variable hoisting; full-pipeline integration with D2/D3/D5.
+- Dead code injection (`tests/deadcode.test.ts`) — determinism; probability bounds; __d prefix; deadcode + flatten integration; no-deadcode disable.
+
+## Repository layout
+
+```
+.
+├── README.md                       ← you are here
+├── TODO.md                         ← roadmap for v0.2-v0.5
+├── examples/
+│   ├── hello.lua                   ← smallest input that exercises all of D1-D3
+│   ├── reference-slice.lua         ← re-implements reference's XOR + 32-dispatch
+│   └── reference.lua               ← trimmed version of the 159KB reference
+├── src/
+│   ├── cli/
+│   │   ├── obfuscate.ts            ← CLI entry (commander)
+│   │   └── decrypt.ts              ← STUB — see TODO.md H1-H6
+│   ├── parser/
+│   │   ├── tokens.ts               ← token kinds + keyword set (Luau 0.x)
+│   │   ├── lexer.ts                ← token stream
+│   │   └── parser.ts               ← recursive-descent AST builder
+│   ├── ir/                         ← v0.2: basic-block IR + flatten
+│   │   ├── ir.ts                   ← Block/Terminator types, buildIR, shuffleArray
+│   │   └── flatten.ts              ← flattenAST: AST → dispatch state machine
+│   ├── transforms/
+│   │   ├── identifier.ts           ← D1
+│   │   ├── strings.ts              ← D3
+│   │   ├── flatten.ts              ← D4 (token-level stub; real work in ir/)
+│   │   └── deadcode.ts             ← D5 (dead code injection)
+│   ├── emit/
+│   │   ├── emitter.ts              ← AST → Luau source
+│   │   └── bit32_polyfill.ts       ← Roblox-compatible _B() polyfill
+│   ├── pipeline/
+│   │   └── obfuscate.ts            ← orchestrator (D1→D5→D4→D2→D3→emit)
+│   ├── vm/                         ← v0.3: bytecode VM compiler
+│   │   ├── opcodes.ts              ← 70-op definitions + alias table
+│   │   ├── encoder.ts              ← (b8,b9) dual-32-bit encoding + serialization
+│   │   ├── constants.ts            ← constant pool manager
+│   │   ├── packer.ts               ← LZW compress + XOR encrypt
+│   │   └── compiler.ts             ← AST → bytecode compiler
+│   ├── runtime/                    ← v0.4 (in progress): Luau interpreter template
+│   ├── util/
+│   │   └── prng.ts                 ← mulberry32, byte buffer helpers
+│   └── index.ts                    ← public API exports
+└── tests/
+    ├── lexer.test.ts
+    ├── parser.test.ts
+    ├── obfuscate.test.ts
+    ├── roundtrip.test.ts
+    └── flatten.test.ts             ← v0.2: IR + flatten + pipeline tests
+```
+
+## Notes on the v0.1 design choices
+
+- **Identifier renaming is two-phase.** Pass D1 in `transforms/identifier.ts`
+  runs on the token stream (so we can do the cheap "rename in tokens" trick).
+  Pass D1 in `pipeline/obfuscate.ts` is skipped — D1 is only done at the
+  token level. This means the AST carries already-renamed identifiers.
+
+- **Number XOR is AST-level.** The token-level function in
+  `transforms/numbers.ts` is a stub that records a meta-channel. The real
+  embedding happens in `pipeline/obfuscate.ts` which walks the AST and
+  attaches a `__obf` field to each `Number` node. The emitter reads
+  `__obf` and emits the canonical `(bit32.bxor(...) + delta)` form.
+
+- **String XOR is also AST-level.** Strings receive a `__str_hex` /
+  `__str_id` meta pair. The emitter substitutes with an inline IIFE that
+  decodes on use. This keeps every string **local** in the output —
+  no global string pool table — which still resists grep but is more
+  readable than the reference (where 90% of a script is a single `load()`
+  call).
+
+- **Identifier / globals split** is encoded in
+  `transforms/identifier.ts::KNOWN_GLOBALS`. Edit the set to expand
+  coverage for Roblox APIs you intend to obfuscate. Anything not in the
+  set *will* be renamed, which can break global lookups.
+
+## Scope notes — what v0.2 explicitly does NOT do
+
+- No bytecode VM. The reference's interpreter shell (`bg(b7, bh, bi)`) is
+  out of scope.
+- No LZW. Strings are XOR'd byte-by-byte.
+- D5 deadcode injection is now active: inserts unreachable branches and dead variables before flattening.
+- No fake-code / opaque predicates at the AST level.
+- No closure environment reflection.
+- Decryptor is a STUB (returns cipher metadata + input preview only).
+- Flattening is top-level only: function bodies are not recursively flattened,
+  and inner `if`/`while`/`for` bodies preserve their original structure inside
+  dispatch cases.
+
+These are all in TODO.md with concrete design notes.
+
+## License
+
+MIT (placeholder — confirm with project owner before publishing).
