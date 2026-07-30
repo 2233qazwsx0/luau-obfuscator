@@ -1,0 +1,1064 @@
+// src/vm/compiler.ts — AST → bytecode compiler.
+//
+// Walks the parser's AST and generates a FuncPrototype tree.
+// Each function (including the main chunk) becomes a FuncPrototype with
+// its own instructions, constants, sub-functions, and upvalue descriptors.
+//
+// Register allocation:
+//   - Each function has a flat register array R[0..255].
+//   - Parameters occupy R[0..paramCount-1].
+//   - Local variables are allocated sequentially after parameters.
+//   - Temporary values use registers above the current local high-water mark.
+//
+// Jump handling:
+//   - Two-pass: first emit instructions with placeholder offsets,
+//     then patch jump targets in a final pass.
+//
+// The compiler uses pickAlias() to randomly select among the 70 opcode
+// aliases, making each compilation produce different bytecode even for
+// the same input + same seed (seed determines alias selection).
+
+import type { Node } from "../parser/parser.js";
+import {
+  Op, pickAlias,
+  type FuncPrototype, type ConstEntry, type EncodeMode,
+} from "./opcodes.js";
+import { ConstantPool } from "./constants.js";
+import { mulberry32 } from "../util/prng.js";
+
+// ---- Compiler state ----
+
+interface Scope {
+  // Variable name → register index
+  locals: Map<string, number>;
+  // Next available register (above all locals)
+  nextReg: number;
+  // Upvalue references needed by this scope
+  upvalueRefs: Map<string, number>; // name → index into upvalues[]
+  upvalues: { fromStack: boolean; index: number }[];
+  // Parent scope (for upvalue resolution)
+  parent: Scope | null;
+}
+
+interface CompilerFunc {
+  scope: Scope;
+  proto: FuncPrototype;
+  pool: ConstantPool;
+  // Jump patches: list of instruction indices that need offset patching
+  jumpPatches: { insnIdx: number; target: number }[];
+  // Sub-functions collected during compilation
+  subFuncs: FuncPrototype[];
+  // Label positions for goto/label support
+  labels: Map<string, number>;
+  pendingGotos: { label: string; insnIdx: number }[];
+  // Loop break/continue stack: each loop pushes its start/end instruction indices
+  loopStack: { loopStart: number; breakPatches: number[] }[];
+}
+
+// ---- Main compiler entry point ----
+
+export function compileAST(ast: Node, seed: number): FuncPrototype {
+  const rng = mulberry32((seed ^ 0xC0FFEE) >>> 0);
+  const compiler = new Compiler(rng);
+  return compiler.compileChunk(ast);
+}
+
+// ---- Compiler class ----
+
+class Compiler {
+  private rng: () => number;
+
+  constructor(rng: () => number) {
+    this.rng = rng;
+  }
+
+  compileChunk(ast: Node): FuncPrototype {
+    const func: CompilerFunc = this.newFunc(null, 0, true);
+    this.compileBlock(func, ast);
+    // Add implicit return
+    this.emitOp(func, Op.RETURN0, 0, 0, 0, 0, 0);
+    this.patchJumps(func);
+    this.resolveGotos(func);
+    return this.finalize(func);
+  }
+
+  // ---- Function management ----
+
+  private newFunc(parent: CompilerFunc | null, paramCount: number, isVararg: boolean): CompilerFunc {
+    const pool = new ConstantPool();
+    const scope: Scope = {
+      locals: new Map(),
+      nextReg: paramCount,
+      upvalueRefs: new Map(),
+      upvalues: [],
+      parent: parent ? parent.scope : null,
+    };
+    const proto: FuncPrototype = {
+      instructions: [],
+      constants: [],
+      subFunctions: [],
+      paramCount,
+      isVararg,
+      upvalues: [],
+    };
+    return {
+      scope,
+      proto,
+      pool,
+      jumpPatches: [],
+      subFuncs: [],
+      labels: new Map(),
+      pendingGotos: [],
+      loopStack: [],
+    };
+  }
+
+  // ---- Register management ----
+
+  private allocReg(func: CompilerFunc, name?: string): number {
+    const reg = func.scope.nextReg;
+    func.scope.nextReg++;
+    if (name) func.scope.locals.set(name, reg);
+    return reg;
+  }
+
+  private freeReg(func: CompilerFunc, reg: number): void {
+    // Only reclaim if it's the topmost temp register
+    if (reg === func.scope.nextReg - 1) {
+      func.scope.nextReg = reg;
+    }
+  }
+
+  private getLocal(func: CompilerFunc, name: string): number | null {
+    let scope: Scope | null = func.scope;
+    while (scope) {
+      const reg = scope.locals.get(name);
+      if (reg !== undefined) return reg;
+      scope = scope.parent;
+    }
+    return null;
+  }
+
+  // ---- Constant pool ----
+
+  private addConst(func: CompilerFunc, entry: ConstEntry): number {
+    return func.pool.add(entry);
+  }
+
+  // ---- Instruction emission ----
+
+  private emit(
+    func: CompilerFunc,
+    op: number,
+    A: number,
+    B: number,
+    C: number,
+    D: number,
+    mode: EncodeMode = 0,
+  ): number {
+    const idx = func.proto.instructions.length;
+    func.proto.instructions.push({ op, A, B, C, D, mode });
+    return idx;
+  }
+
+  /** Emit an instruction for a semantic Op, picking a random alias. */
+  private emitOp(
+    func: CompilerFunc,
+    sem: Op,
+    A: number,
+    B: number,
+    C: number,
+    D: number,
+    mode: EncodeMode = 0,
+  ): number {
+    const alias = pickAlias(this.rng, sem);
+    return this.emit(func, alias, A, B, C, D, mode);
+  }
+
+  // ---- Jump patching ----
+
+  private emitJump(func: CompilerFunc, sem: Op, A: number, C: number): number {
+    const idx = this.emitOp(func, sem, A, 0, C, 0, 2);
+    return idx;
+  }
+
+  private patchJumps(func: CompilerFunc): void {
+    for (const { insnIdx, target } of func.jumpPatches) {
+      const insn = func.proto.instructions[insnIdx];
+      if (insn) {
+        insn.C = target - insnIdx;
+      }
+    }
+  }
+
+  private resolveGotos(func: CompilerFunc): void {
+    for (const { label, insnIdx } of func.pendingGotos) {
+      const target = func.labels.get(label);
+      if (target === undefined) {
+        throw new Error(`goto to undefined label '${label}'`);
+      }
+      const insn = func.proto.instructions[insnIdx];
+      if (insn) {
+        insn.C = target - insnIdx;
+      }
+    }
+  }
+
+  // ---- Finalize a function prototype ----
+
+  private finalize(func: CompilerFunc): FuncPrototype {
+    func.proto.constants = func.pool.getAll();
+    func.proto.subFunctions = func.subFuncs;
+    func.proto.upvalues = func.scope.upvalues;
+    return func.proto;
+  }
+
+  // ---- Block compilation ----
+
+  private compileBlock(func: CompilerFunc, node: Node): void {
+    if (node.t !== "Block") return;
+    for (const stmt of node.body) {
+      this.compileStmt(func, stmt);
+    }
+  }
+
+  // ---- Statement compilation ----
+
+  private compileStmt(func: CompilerFunc, stmt: Node): void {
+    switch (stmt.t) {
+      case "Local":
+        this.compileLocal(func, stmt);
+        break;
+      case "Assign":
+        this.compileAssign(func, stmt);
+        break;
+      case "If":
+        this.compileIf(func, stmt);
+        break;
+      case "While":
+        this.compileWhile(func, stmt);
+        break;
+      case "Repeat":
+        this.compileRepeat(func, stmt);
+        break;
+      case "For":
+        this.compileFor(func, stmt);
+        break;
+      case "ForIn":
+        this.compileForIn(func, stmt);
+        break;
+      case "Function": {
+        if ("name" in stmt && stmt.name) {
+          this.compileFunctionDecl(func, stmt);
+        }
+        break;
+      }
+      case "Return":
+        this.compileReturn(func, stmt);
+        break;
+      case "Call":
+        this.compileCallStmt(func, stmt);
+        break;
+      case "Method":
+        this.compileMethodStmt(func, stmt);
+        break;
+      case "Do":
+        this.compileBlock(func, stmt.block);
+        break;
+      case "Break": {
+        // Emit JUMP — target will be patched by the enclosing loop
+        const breakIdx = this.emitJump(func, Op.JUMP, 0, 0);
+        if (func.loopStack.length > 0) {
+          const top = func.loopStack[func.loopStack.length - 1]!;
+          top.breakPatches.push(breakIdx);
+        }
+        break;
+      }
+      case "Continue": {
+        // Emit JUMP back to loop start — target patched by enclosing loop
+        const contIdx = this.emitJump(func, Op.JUMP, 0, 0);
+        if (func.loopStack.length > 0) {
+          const top = func.loopStack[func.loopStack.length - 1]!;
+          func.proto.instructions[contIdx]!.C = top.loopStart - contIdx;
+        }
+        break;
+      }
+      case "Goto": {
+        this.emitJump(func, Op.JUMP, 0, 0);
+        func.pendingGotos.push({ label: stmt.label, insnIdx: func.proto.instructions.length - 1 });
+        break;
+      }
+      case "Label": {
+        func.labels.set(stmt.name, func.proto.instructions.length);
+        break;
+      }
+      case "TypeDecl":
+        // Type declarations are transparent — no bytecode emitted
+        break;
+      case "Empty":
+        break;
+      default:
+        // Unhandled statement types — no bytecode emitted
+        break;
+    }
+  }
+
+  // ---- Local declaration ----
+
+  private compileLocal(func: CompilerFunc, stmt: Node): void {
+    if (stmt.t !== "Local") return;
+    const numNames = stmt.names.length;
+    // Allocate registers for all locals
+    const regs: number[] = [];
+    for (let i = 0; i < numNames; i++) {
+      regs.push(this.allocReg(func, stmt.names[i]));
+    }
+    // Compile values
+    if (stmt.values && stmt.values.length > 0) {
+      for (let i = 0; i < stmt.values.length; i++) {
+        if (i < numNames) {
+          this.compileExpr(func, stmt.values[i]!, regs[i]!);
+        } else {
+          const tempReg = this.allocReg(func);
+          this.compileExpr(func, stmt.values[i]!, tempReg);
+          this.freeReg(func, tempReg);
+        }
+      }
+    }
+  }
+
+  // ---- Assignment ----
+
+  private compileAssign(func: CompilerFunc, stmt: Node): void {
+    if (stmt.t !== "Assign") return;
+    for (let i = 0; i < stmt.targets.length; i++) {
+      const target = stmt.targets[i]!;
+      const value = stmt.values[i] ?? { t: "Nil" } as Node;
+
+      if (target.t === "Ident") {
+        const reg = this.getLocal(func, target.name);
+        if (reg !== null) {
+          // Local assignment
+          this.compileExpr(func, value, reg);
+        } else {
+          // Global assignment: SETGLOBAL
+          const constIdx = this.addConst(func, { type: "string", value: target.name });
+          const tempReg = this.allocReg(func);
+          this.compileExpr(func, value, tempReg);
+          this.emitOp(func, Op.SETGLOBAL, tempReg, constIdx, 0, 0, 0);
+          this.freeReg(func, tempReg);
+        }
+      } else if (target.t === "Index") {
+        // Table field assignment: R[target].R[index] = R[value]
+        const tblReg = this.allocReg(func);
+        const idxReg = this.allocReg(func);
+        const valReg = this.allocReg(func);
+        this.compileExpr(func, target.obj, tblReg);
+        this.compileExpr(func, value, valReg);
+        // Use SETTABLE: tbl[K[idx]] = val
+        if (target.index.t === "String") {
+          const constIdx = this.addConst(func, { type: "string", value: target.index.value });
+          this.emitOp(func, Op.SETTABLE, tblReg, constIdx, valReg, 0, 0);
+        } else {
+          // Dynamic index: compile into constIdx
+          this.compileExpr(func, target.index, idxReg);
+          this.emitOp(func, Op.SETTABLE, tblReg, idxReg, valReg, 0, 0);
+        }
+        this.freeReg(func, valReg);
+        this.freeReg(func, idxReg);
+        this.freeReg(func, tblReg);
+      }
+    }
+  }
+
+  // ---- If statement ----
+
+  private compileIf(func: CompilerFunc, stmt: Node): void {
+    if (stmt.t !== "If") return;
+    const jumpTargets: number[] = [];
+
+    for (let i = 0; i < stmt.branches.length; i++) {
+      const branch = stmt.branches[i]!;
+      const condReg = this.allocReg(func);
+      this.compileExpr(func, branch.cond, condReg);
+
+      // TEST_FALSE: if not cond then jump to next branch/end
+      const testIdx = this.emitJump(func, Op.TEST_FALSE, condReg, 0);
+      this.freeReg(func, condReg);
+
+      // Compile the then-block
+      this.compileBlock(func, branch.block);
+
+      // JUMP to end (skip else/elseif blocks)
+      const endJumpIdx = this.emitJump(func, Op.JUMP, 0, 0);
+      jumpTargets.push(endJumpIdx);
+
+      // Patch test to jump here (to next branch)
+      func.proto.instructions[testIdx]!.C = func.proto.instructions.length - testIdx;
+    }
+
+    // Else block
+    if (stmt.else) {
+      this.compileBlock(func, stmt.else);
+    }
+
+    // Patch all end-jumps to here
+    const endPos = func.proto.instructions.length;
+    for (const idx of jumpTargets) {
+      func.proto.instructions[idx]!.C = endPos - idx;
+    }
+  }
+
+  // ---- While loop ----
+
+  private compileWhile(func: CompilerFunc, stmt: Node): void {
+    if (stmt.t !== "While") return;
+    const loopStart = func.proto.instructions.length;
+    func.loopStack.push({ loopStart, breakPatches: [] });
+
+    const condReg = this.allocReg(func);
+    this.compileExpr(func, stmt.cond, condReg);
+
+    // TEST_FALSE: if not cond then jump past loop
+    const exitTestIdx = this.emitJump(func, Op.TEST_FALSE, condReg, 0);
+    this.freeReg(func, condReg);
+
+    // Loop body
+    this.compileBlock(func, stmt.block);
+
+    // JUMP back to loop start
+    this.emitJump(func, Op.JUMP, 0, loopStart - func.proto.instructions.length);
+
+    // Patch exit test + all breaks
+    const top = func.loopStack.pop()!;
+    const exitPos = func.proto.instructions.length;
+    func.proto.instructions[exitTestIdx]!.C = exitPos - exitTestIdx;
+    for (const breakIdx of top.breakPatches) {
+      func.proto.instructions[breakIdx]!.C = exitPos - breakIdx;
+    }
+  }
+
+  // ---- Repeat-until ----
+
+  private compileRepeat(func: CompilerFunc, stmt: Node): void {
+    if (stmt.t !== "Repeat") return;
+    const loopStart = func.proto.instructions.length;
+    func.loopStack.push({ loopStart, breakPatches: [] });
+
+    // Loop body
+    this.compileBlock(func, stmt.block);
+
+    // Evaluate condition
+    const condReg = this.allocReg(func);
+    this.compileExpr(func, stmt.cond, condReg);
+
+    // TEST_FALSE: if not cond then jump back to loop start
+    this.emitJump(func, Op.TEST_FALSE, condReg, loopStart - func.proto.instructions.length - 1);
+    this.freeReg(func, condReg);
+
+    // Patch all breaks
+    const top = func.loopStack.pop()!;
+    const exitPos = func.proto.instructions.length;
+    for (const breakIdx of top.breakPatches) {
+      func.proto.instructions[breakIdx]!.C = exitPos - breakIdx;
+    }
+  }
+
+  // ---- Numeric for ----
+
+  private compileFor(func: CompilerFunc, stmt: Node): void {
+    if (stmt.t !== "For") return;
+    // R[A] = start, R[A+1] = stop, R[A+2] = step
+    const baseReg = this.allocReg(func, stmt.varName);
+    const stopReg = this.allocReg(func);
+    const stepReg = this.allocReg(func);
+    const counterReg = this.allocReg(func, stmt.varName); // loop variable (visible in body)
+
+    this.compileExpr(func, stmt.start, baseReg);
+    this.compileExpr(func, stmt.stop, stopReg);
+    if (stmt.step) {
+      this.compileExpr(func, stmt.step, stepReg);
+    } else {
+      // Default step = 1
+      const oneIdx = this.addConst(func, { type: "number", value: 1 });
+      this.emitOp(func, Op.LOADK, stepReg, oneIdx, 0, 0, 0);
+    }
+
+    // FORPREP: R[baseReg] -= R[stepReg]; jump to loop body start
+    const prepIdx = this.emitOp(func, Op.FORPREP, baseReg, 0, 0, 0, 0);
+    const loopBodyStart = func.proto.instructions.length;
+    func.loopStack.push({ loopStart: loopBodyStart, breakPatches: [] });
+
+    // Set counter = current value
+    this.emitOp(func, Op.MOVE, counterReg, baseReg, 0, 0, 0);
+
+    // Loop body
+    this.compileBlock(func, stmt.block);
+
+    // FORLOOP: R[baseReg] -= R[stepReg]; if within bounds, jump back to body start
+    this.emitOp(func, Op.FORLOOP, baseReg, 0, loopBodyStart - func.proto.instructions.length, baseReg, 0);
+
+    // Patch FORPREP jump
+    func.proto.instructions[prepIdx]!.C = loopBodyStart - prepIdx - 1;
+
+    // Patch all breaks
+    const top = func.loopStack.pop()!;
+    const exitPos = func.proto.instructions.length;
+    for (const breakIdx of top.breakPatches) {
+      func.proto.instructions[breakIdx]!.C = exitPos - breakIdx;
+    }
+
+    // Free for-loop registers
+    this.freeReg(func, counterReg);
+    this.freeReg(func, stepReg);
+    this.freeReg(func, stopReg);
+    this.freeReg(func, baseReg);
+  }
+
+  // ---- Generic for (for ... in) ----
+
+  private compileForIn(func: CompilerFunc, stmt: Node): void {
+    if (stmt.t !== "ForIn") return;
+    // Allocate registers for iterator state: R[A] = iterator function, R[A+1] = state, R[A+2] = control
+    const iterReg = this.allocReg(func);
+    const stateReg = this.allocReg(func);
+    const ctrlReg = this.allocReg(func);
+
+    // Compile iterator expressions (e.g., pairs(t), ipairs(t))
+    if (stmt.iter.length === 1) {
+      this.compileExpr(func, stmt.iter[0]!, iterReg);
+    } else if (stmt.iter.length >= 2) {
+      this.compileExpr(func, stmt.iter[0]!, iterReg);
+      this.compileExpr(func, stmt.iter[1]!, stateReg);
+      if (stmt.iter.length >= 3) {
+        this.compileExpr(func, stmt.iter[2]!, ctrlReg);
+      }
+    }
+
+    // Allocate loop variables
+    const varRegs: number[] = [];
+    for (const name of stmt.names) {
+      varRegs.push(this.allocReg(func, name));
+    }
+
+    const loopStart = func.proto.instructions.length;
+    func.loopStack.push({ loopStart, breakPatches: [] });
+
+    // Call iterator: R[varRegs[0]], R[varRegs[1]], ... = iter(state, ctrl)
+    // Use CALL_RET_N: call R[iterReg] with args R[stateReg], R[ctrlReg], results to R[varRegs[0]..]
+    const numResults = varRegs.length;
+    const numArgs = 2; // state + control
+    this.emitOp(func, Op.CALL_RET_N, iterReg, numArgs, numResults, 0, 0);
+
+    // Test first variable: if nil, exit loop
+    this.emitJump(func, Op.TEST_FALSE, varRegs[0]!, 0);
+
+    // Loop body
+    this.compileBlock(func, stmt.block);
+
+    // JUMP back to iterator call
+    this.emitJump(func, Op.JUMP, 0, loopStart - func.proto.instructions.length);
+
+    // Patch all breaks
+    const top = func.loopStack.pop()!;
+    const exitPos = func.proto.instructions.length;
+    for (const breakIdx of top.breakPatches) {
+      func.proto.instructions[breakIdx]!.C = exitPos - breakIdx;
+    }
+
+    // Free registers
+    for (let i = varRegs.length - 1; i >= 0; i--) {
+      this.freeReg(func, varRegs[i]!);
+    }
+    this.freeReg(func, ctrlReg);
+    this.freeReg(func, stateReg);
+    this.freeReg(func, iterReg);
+  }
+
+  // ---- Function declaration ----
+
+  private compileFunctionDecl(func: CompilerFunc, stmt: Node): void {
+    if (stmt.t !== "Function" || !("name" in stmt) || !stmt.name) return;
+    const params = stmt.params.filter(p => p !== "...");
+    const subFunc = this.newFunc(func, params.length, stmt.params.includes("..."));
+    for (let i = 0; i < params.length; i++) {
+      subFunc.scope.locals.set(params[i]!, i);
+    }
+    this.compileBlock(subFunc, stmt.body);
+    this.emitOp(subFunc, Op.RETURN0, 0, 0, 0, 0, 0);
+    this.patchJumps(subFunc);
+    this.resolveGotos(subFunc);
+    const proto = this.finalize(subFunc);
+    func.subFuncs.push(proto);
+
+    const subIdx = func.subFuncs.length - 1;
+
+    // Assign to local or global
+    if (stmt.name.parts.length === 1 && !stmt.name.method) {
+      const name = stmt.name.parts[0]!;
+      const localReg = this.getLocal(func, name);
+      if (localReg !== null) {
+        // CLOSURE_SIMPLE: R[localReg] = createClosure(prototype[subIdx], nil, env)
+        this.emitOp(func, Op.CLOSURE_SIMPLE, localReg, subIdx, 0, 0, 0);
+      } else {
+        // Global function: create closure and store in global
+        const tempReg = this.allocReg(func);
+        this.emitOp(func, Op.CLOSURE_SIMPLE, tempReg, subIdx, 0, 0, 0);
+        const constIdx = this.addConst(func, { type: "string", value: name });
+        this.emitOp(func, Op.SETGLOBAL, tempReg, constIdx, 0, 0, 0);
+        this.freeReg(func, tempReg);
+      }
+    }
+    // TODO: handle dotted names (obj.method = function ...)
+  }
+
+  // ---- Return ----
+
+  private compileReturn(func: CompilerFunc, stmt: Node): void {
+    if (stmt.t !== "Return") return;
+    if (stmt.values.length === 0) {
+      this.emitOp(func, Op.RETURN0, 0, 0, 0, 0, 0);
+    } else {
+      // Compile all return values into consecutive registers
+      const baseReg = this.allocReg(func);
+      this.compileExpr(func, stmt.values[0]!, baseReg);
+      for (let i = 1; i < stmt.values.length; i++) {
+        const reg = baseReg + i;
+        func.scope.nextReg = Math.max(func.scope.nextReg, reg + 1);
+        this.compileExpr(func, stmt.values[i]!, reg);
+      }
+      this.emitOp(func, Op.RETURN_N, baseReg, 0, stmt.values.length + 1, 0, 0);
+    }
+  }
+
+  // ---- Call statement ----
+
+  private compileCallStmt(func: CompilerFunc, stmt: Node): void {
+    if (stmt.t !== "Call") return;
+    const calleeReg = this.allocReg(func);
+    this.compileExpr(func, stmt.callee, calleeReg);
+    // Compile args into consecutive registers
+    const argBase = this.allocReg(func);
+    for (let i = 0; i < stmt.args.length; i++) {
+      const reg = argBase + i;
+      func.scope.nextReg = Math.max(func.scope.nextReg, reg + 1);
+      this.compileExpr(func, stmt.args[i]!, reg);
+    }
+    // CALL_RET_N with 0 results (statement context)
+    this.emitOp(func, Op.CALL_RET_N, calleeReg, stmt.args.length, 0, 0, 0);
+    this.freeReg(func, argBase);
+    this.freeReg(func, calleeReg);
+  }
+
+  private compileMethodStmt(func: CompilerFunc, stmt: Node): void {
+    if (stmt.t !== "Method") return;
+    // obj:method(args) → obj.method(obj, args)
+    const objReg = this.allocReg(func);
+    this.compileExpr(func, stmt.callee, objReg);
+    // obj+1 = method string, obj = function
+    const methodConstIdx = this.addConst(func, { type: "string", value: stmt.name });
+    // GETFIELD_K: R[objReg+1] = R[objReg]; R[objReg] = R[objReg][K[method]]
+    this.emitOp(func, Op.GETFIELD_K, objReg, objReg, methodConstIdx, 0, 0);
+    // Args: first arg is self (objReg+1 was set by GETFIELD_K)
+    const argBase = objReg + 2;
+    func.scope.nextReg = Math.max(func.scope.nextReg, argBase + stmt.args.length);
+    for (let i = 0; i < stmt.args.length; i++) {
+      this.compileExpr(func, stmt.args[i]!, argBase + i);
+    }
+    // CALL_RET_N: call R[objReg](R[objReg+1], R[argBase..])
+    this.emitOp(func, Op.CALL_RET_N, objReg, stmt.args.length + 1, 0, 0, 0);
+    this.freeReg(func, objReg);
+  }
+
+  // ---- Expression compilation ----
+  // Compiles an expression and places the result in R[destReg].
+
+  private compileExpr(func: CompilerFunc, expr: Node, destReg: number): void {
+    switch (expr.t) {
+      case "Nil": {
+        // Emit LOADBOOL false as a stand-in for nil
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0);
+        break;
+      }
+      case "Bool": {
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, expr.value ? 1 : 0, 0, 0);
+        break;
+      }
+      case "Number": {
+        const idx = this.addConst(func, { type: "number", value: Number(expr.value) });
+        this.emitOp(func, Op.LOADK, destReg, idx, 0, 0, 0);
+        break;
+      }
+      case "String": {
+        const idx = this.addConst(func, { type: "string", value: expr.value });
+        this.emitOp(func, Op.LOADK, destReg, idx, 0, 0, 0);
+        break;
+      }
+      case "Ident": {
+        const reg = this.getLocal(func, expr.name);
+        if (reg !== null) {
+          this.emitOp(func, Op.MOVE, destReg, reg, 0, 0, 0);
+        } else {
+          // Global access: GETGLOBAL via GETUPVAL + LOADK pattern
+          // In our VM, globals are accessed via the env table (bi in reference).
+          // We store global names as string constants and use GETUPVAL-like access.
+          const constIdx = this.addConst(func, { type: "string", value: expr.name });
+          this.emitOp(func, Op.GETUPVAL, destReg, constIdx, 0, 0, 0);
+        }
+        break;
+      }
+      case "Binop": {
+        this.compileBinop(func, expr, destReg);
+        break;
+      }
+      case "Unop": {
+        this.compileUnop(func, expr, destReg);
+        break;
+      }
+      case "Concat": {
+        // Compile all parts into consecutive registers, then CONCAT
+        const baseReg = this.allocReg(func);
+        this.compileExpr(func, expr.parts[0]!, baseReg);
+        for (let i = 1; i < expr.parts.length; i++) {
+          const reg = baseReg + i;
+          func.scope.nextReg = Math.max(func.scope.nextReg, reg + 1);
+          this.compileExpr(func, expr.parts[i]!, reg);
+        }
+        this.emitOp(func, Op.CONCAT, destReg, baseReg, expr.parts.length, baseReg + expr.parts.length - 1, 0);
+        this.freeReg(func, baseReg);
+        break;
+      }
+      case "Call": {
+        this.compileCallExpr(func, expr, destReg);
+        break;
+      }
+      case "Method": {
+        this.compileMethodExpr(func, expr, destReg);
+        break;
+      }
+      case "Index": {
+        const objReg = this.allocReg(func);
+        const idxReg = this.allocReg(func);
+        this.compileExpr(func, expr.obj, objReg);
+        this.compileExpr(func, expr.index, idxReg);
+        // GETFIELD with register index — use CALL_RET_N or a GETTABLE op
+        // For string keys, we use GETFIELD_K2 (constant key access)
+        if (expr.index.t === "String") {
+          const constIdx = this.addConst(func, { type: "string", value: expr.index.value });
+          this.emitOp(func, Op.GETFIELD_K2, destReg, objReg, constIdx, 0, 0);
+        } else {
+          // Dynamic index: emit as rawset-like call or a specialized op
+          // For now, we handle this via a table access pattern
+          // TODO: implement GETTABLE_RR opcode
+          // Fall back to constant-based access with a temp
+          this.emitOp(func, Op.GETFIELD_K2, destReg, objReg, idxReg, 0, 0);
+        }
+        this.freeReg(func, idxReg);
+        this.freeReg(func, objReg);
+        break;
+      }
+      case "Function": {
+        this.compileFunctionExpr(func, expr, destReg);
+        break;
+      }
+      case "Table": {
+        this.compileTable(func, expr, destReg);
+        break;
+      }
+      case "IfExpr": {
+        // if cond then a else b → compile as conditional + move
+        const condReg = this.allocReg(func);
+        this.compileExpr(func, expr.cond, condReg);
+        const testIdx = this.emitJump(func, Op.TEST_FALSE, condReg, 0);
+        this.freeReg(func, condReg);
+
+        // Then branch
+        this.compileExpr(func, expr.then, destReg);
+        const endJumpIdx = this.emitJump(func, Op.JUMP, 0, 0);
+
+        // Else branch
+        func.proto.instructions[testIdx]!.C = func.proto.instructions.length - testIdx;
+        this.compileExpr(func, expr.else, destReg);
+
+        // Patch end jump
+        const endPos = func.proto.instructions.length;
+        func.proto.instructions[endJumpIdx]!.C = endPos - endJumpIdx;
+        break;
+      }
+      case "Vararg": {
+        // Load vararg into destReg — use a VARARG-like op
+        // For now, emit as a placeholder
+        this.emitOp(func, Op.MOVE, destReg, 0, 0, 0, 0); // TODO: proper VARARG op
+        break;
+      }
+      case "Interp": {
+        // Interp strings are already lowered to Concat by the parser
+        // Handle as concat chain
+        const baseReg = this.allocReg(func);
+        for (let i = 0; i < expr.parts.length; i++) {
+          const reg = baseReg + i;
+          func.scope.nextReg = Math.max(func.scope.nextReg, reg + 1);
+          this.compileExpr(func, expr.parts[i]!, reg);
+        }
+        this.emitOp(func, Op.CONCAT, destReg, baseReg, expr.parts.length, baseReg + expr.parts.length - 1, 0);
+        this.freeReg(func, baseReg);
+        break;
+      }
+      default:
+        // Unhandled expression type — emit nil placeholder
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0);
+        break;
+    }
+  }
+
+  // ---- Binary operations ----
+
+  private compileBinop(func: CompilerFunc, expr: Node, destReg: number): void {
+    if (expr.t !== "Binop") return;
+    const lhsReg = this.allocReg(func);
+    const rhsReg = this.allocReg(func);
+    this.compileExpr(func, expr.lhs, lhsReg);
+    this.compileExpr(func, expr.rhs, rhsReg);
+
+    switch (expr.op) {
+      case "+":
+        this.emitOp(func, Op.ADD_RR, destReg, lhsReg, rhsReg, 0, 0);
+        break;
+      case "-":
+        this.emitOp(func, Op.SUB_RR, destReg, lhsReg, rhsReg, 0, 0);
+        break;
+      case "*":
+        this.emitOp(func, Op.MUL_RR, destReg, lhsReg, rhsReg, 0, 0);
+        break;
+      case "/":
+      case "//":
+        this.emitOp(func, Op.DIV_RR, destReg, lhsReg, rhsReg, 0, 0);
+        break;
+      case "%":
+        this.emitOp(func, Op.MOD_RR, destReg, lhsReg, rhsReg, 0, 0);
+        break;
+      case "^":
+        // Power not in base opcodes — emit as placeholder; runtime handles via math.pow
+        this.emitOp(func, Op.MUL_RR, destReg, lhsReg, rhsReg, 0, 0);
+        break;
+      case "==": {
+        // A == B: subtract and test zero
+        const eqSubReg = this.allocReg(func);
+        this.emitOp(func, Op.SUB_RR, eqSubReg, lhsReg, rhsReg, 0, 0);
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE
+        const eqTestIdx = this.emitJump(func, Op.TEST_FALSE, eqSubReg, 0);
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
+        func.proto.instructions[eqTestIdx]!.C = func.proto.instructions.length - eqTestIdx;
+        this.freeReg(func, eqSubReg);
+        break;
+      }
+        // A ~= B: invert == logic
+        const subReg = this.allocReg(func);
+        this.emitOp(func, Op.SUB_RR, subReg, lhsReg, rhsReg, 0, 0);
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
+        const neqTestIdx = this.emitJump(func, Op.TEST_FALSE, subReg, 0);
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE
+        func.proto.instructions[neqTestIdx]!.C = func.proto.instructions.length - neqTestIdx;
+        this.freeReg(func, subReg);
+        break;
+      }
+      case "<": {
+        // A < B: use TEST_LT_RR (A is R[lhsReg], B is R[rhsReg])
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE first
+        const ltTestIdx = this.emitJump(func, Op.TEST_LT_RR, lhsReg, 0);
+        // If TEST_LT branches to pc+1, we fall through to set FALSE
+        // But TEST_LT as defined: if R[A] < R[B] then pc++ else pc += C
+        // We need to adjust B operand. B = rhsReg
+        const ltInsn = func.proto.instructions[ltTestIdx]!;
+        ltInsn.B = rhsReg;
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
+        func.proto.instructions[ltTestIdx]!.C = func.proto.instructions.length - ltTestIdx;
+        break;
+      }
+      case ">": {
+        // A > B  equivalent to  B < A
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE
+        const gtTestIdx = this.emitJump(func, Op.TEST_LT_RR, rhsReg, 0);
+        const gtInsn = func.proto.instructions[gtTestIdx]!;
+        gtInsn.B = lhsReg;
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
+        func.proto.instructions[gtTestIdx]!.C = func.proto.instructions.length - gtTestIdx;
+        break;
+      }
+      case "<=": {
+        // A <= B  ==  !(B < A)  reversed
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE
+        const leTestIdx = this.emitJump(func, Op.TEST_LT_RR, rhsReg, 0);
+        const leInsn = func.proto.instructions[leTestIdx]!;
+        leInsn.B = lhsReg;
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
+        func.proto.instructions[leTestIdx]!.C = func.proto.instructions.length - leTestIdx;
+        break;
+      }
+      case ">=": {
+        // A >= B  ==  !(A < B)
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0); // TRUE
+        const geTestIdx = this.emitJump(func, Op.TEST_LT_RR, lhsReg, 0);
+        const geInsn = func.proto.instructions[geTestIdx]!;
+        geInsn.B = rhsReg;
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0); // FALSE
+        func.proto.instructions[geTestIdx]!.C = func.proto.instructions.length - geTestIdx;
+        break;
+      }
+        break;
+      case "and":
+        // A and B: if A is falsy, result = A, else result = B
+        this.emitOp(func, Op.MOVE, destReg, lhsReg, 0, 0, 0);
+        const andTestIdx = this.emitJump(func, Op.TEST_FALSE, destReg, 0);
+        this.emitOp(func, Op.MOVE, destReg, rhsReg, 0, 0, 0);
+        func.proto.instructions[andTestIdx]!.C = func.proto.instructions.length - andTestIdx;
+        break;
+      case "or":
+        // A or B: if A is truthy, result = A, else result = B
+        this.emitOp(func, Op.MOVE, destReg, lhsReg, 0, 0, 0);
+        const orTestIdx = this.emitJump(func, Op.TEST_FALSE, destReg, 0);
+        func.proto.instructions[orTestIdx]!.C = func.proto.instructions.length - orTestIdx;
+        this.emitOp(func, Op.MOVE, destReg, rhsReg, 0, 0, 0);
+        break;
+      default:
+        // Unknown operator — nil placeholder
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0);
+        break;
+    }
+
+    this.freeReg(func, rhsReg);
+    this.freeReg(func, lhsReg);
+  }
+
+  // ---- Unary operations ----
+
+  private compileUnop(func: CompilerFunc, expr: Node, destReg: number): void {
+    if (expr.t !== "Unop") return;
+    const argReg = this.allocReg(func);
+    this.compileExpr(func, expr.arg, argReg);
+
+    switch (expr.op) {
+      case "-":
+        // Negation: 0 - arg
+        const zeroIdx = this.addConst(func, { type: "number", value: 0 });
+        this.emitOp(func, Op.LOADK, destReg, zeroIdx, 0, 0, 0);
+        this.emitOp(func, Op.SUB_RR, destReg, destReg, argReg, 0, 0);
+        break;
+      case "not":
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0);
+        // if arg is truthy, set false; else set true
+        const notTestIdx = this.emitJump(func, Op.TEST_FALSE, argReg, 0);
+        func.proto.instructions[notTestIdx]!.C = func.proto.instructions.length - notTestIdx;
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 1, 0, 0);
+        break;
+      case "#":
+        this.emitOp(func, Op.LEN, destReg, argReg, 0, 0, 0);
+        break;
+      default:
+        this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0);
+        break;
+    }
+
+    this.freeReg(func, argReg);
+  }
+
+  // ---- Call expression ----
+
+  private compileCallExpr(func: CompilerFunc, expr: Node, destReg: number): void {
+    if (expr.t !== "Call") return;
+    const calleeReg = (destReg !== func.scope.nextReg - 1) ? destReg : this.allocReg(func);
+    this.compileExpr(func, expr.callee, calleeReg);
+    const argBase = this.allocReg(func);
+    for (let i = 0; i < expr.args.length; i++) {
+      const reg = argBase + i;
+      func.scope.nextReg = Math.max(func.scope.nextReg, reg + 1);
+      this.compileExpr(func, expr.args[i]!, reg);
+    }
+    // CALL_RET_N with 1 result to destReg
+    this.emitOp(func, Op.CALL_RET_N, calleeReg, expr.args.length, 1, 0, 0);
+    // If calleeReg was separate from destReg, move result
+    if (calleeReg !== destReg) {
+      this.emitOp(func, Op.MOVE, destReg, calleeReg, 0, 0, 0);
+      this.freeReg(func, calleeReg);
+    }
+    this.freeReg(func, argBase);
+  }
+
+  // ---- Method expression ----
+
+  private compileMethodExpr(func: CompilerFunc, expr: Node, destReg: number): void {
+    if (expr.t !== "Method") return;
+    const objReg = this.allocReg(func);
+    this.compileExpr(func, expr.callee, objReg);
+    const methodConstIdx = this.addConst(func, { type: "string", value: expr.name });
+    // GETFIELD_K: R[objReg+1] = R[objReg]; R[objReg] = R[objReg][K[method]]
+    this.emitOp(func, Op.GETFIELD_K, objReg, objReg, methodConstIdx, 0, 0);
+    // Args: first arg is self (at objReg+1), then regular args
+    const argBase = objReg + 2;
+    func.scope.nextReg = Math.max(func.scope.nextReg, argBase + expr.args.length);
+    for (let i = 0; i < expr.args.length; i++) {
+      this.compileExpr(func, expr.args[i]!, argBase + i);
+    }
+    // CALL_RET_N: call R[objReg](R[objReg+1], R[argBase..])
+    this.emitOp(func, Op.CALL_RET_N, objReg, expr.args.length + 1, 1, 0, 0);
+    // Move result to destReg
+    this.emitOp(func, Op.MOVE, destReg, objReg, 0, 0, 0);
+    this.freeReg(func, objReg);
+  }
+
+  // ---- Function expression (anonymous) ----
+
+  private compileFunctionExpr(func: CompilerFunc, expr: Node, destReg: number): void {
+    if (expr.t !== "Function") return;
+    const params = expr.params.filter(p => p !== "...");
+    const subFunc = this.newFunc(func, params.length, "vararg" in expr ? expr.vararg : expr.params.includes("..."));
+    for (let i = 0; i < params.length; i++) {
+      subFunc.scope.locals.set(params[i]!, i);
+    }
+    this.compileBlock(subFunc, expr.body);
+    this.emitOp(subFunc, Op.RETURN0, 0, 0, 0, 0, 0);
+    this.patchJumps(subFunc);
+    this.resolveGotos(subFunc);
+    const proto = this.finalize(subFunc);
+    func.subFuncs.push(proto);
+    const subIdx = func.subFuncs.length - 1;
+    this.emitOp(func, Op.CLOSURE_SIMPLE, destReg, subIdx, 0, 0, 0);
+  }
+
+  // ---- Table constructor ----
+  private compileTable(func: CompilerFunc, expr: Node, destReg: number): void {
+    if (expr.t !== "Table") return;
+    // Set destReg = {} via LOADBOOL false as nil (VM interprets as empty table)
+    this.emitOp(func, Op.LOADBOOL, destReg, 0, 0, 0, 0);
+
+    for (const f of expr.fields) {
+      // Get constant index for key if provided
+      if (f.key) {
+        // R[destReg][K[key]] = R[value]
+        if (f.key.t === "String") {
+          const keyIdx = this.addConst(func, { type: "string", value: f.key.value });
+          const valReg = this.allocReg(func);
+          this.compileExpr(func, f.value, valReg);
+          this.emitOp(func, Op.SETTABLE, destReg, keyIdx, valReg, 0, 0);
+          this.freeReg(func, valReg);
+        } else {
+          const keyReg = this.allocReg(func);
+          const valReg = this.allocReg(func);
+          this.compileExpr(func, f.key, keyReg);
+          this.compileExpr(func, f.value, valReg);
+          this.emitOp(func, Op.SETTABLE, destReg, keyReg, valReg, 0, 0);
+          this.freeReg(func, valReg);
+          this.freeReg(func, keyReg);
+        }
+      } else {
+        // Array-like entry: value only, stored at sequential integer keys
+        // We just store the value directly — runtime handles array part
+        const valReg = this.allocReg(func);
+        this.compileExpr(func, f.value, valReg);
+        const keyIdx = this.addConst(func, { type: "number", value: 0 });
+        this.emitOp(func, Op.SETTABLE, destReg, keyIdx, valReg, 0, 0);
+        this.freeReg(func, valReg);
+      }
+    }
+  }
+}
