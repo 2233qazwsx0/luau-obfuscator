@@ -17,20 +17,29 @@
 // The compiler uses pickAlias() to randomly select among the 70 opcode
 // aliases, making each compilation produce different bytecode even for
 // the same input + same seed (seed determines alias selection).
-import { Op, pickAlias, } from "./opcodes.js";
+import { Op, buildSemToOpMap, OP_SWITCH_VM, OP_DEAD_VM, VM_COUNT, DEAD_VM_IDS, } from "./opcodes.js";
 import { ConstantPool } from "./constants.js";
 import { mulberry32 } from "../util/prng.js";
 // ---- Main compiler entry point ----
 export function compileAST(ast, seed) {
     const rng = mulberry32((seed ^ 0xC0FFEE) >>> 0);
-    const compiler = new Compiler(rng);
+    const compiler = new Compiler(rng, seed);
     return compiler.compileChunk(ast);
 }
 // ---- Compiler class ----
 class Compiler {
     rng;
-    constructor(rng) {
+    // v0.8 多 VM：sem→op 正向表，按 vmId 索引。每个 VM 下同一语义对应不同 op 号。
+    // buildSemToOpMap 对多别名的语义随机选一个；这里固定下来贯穿整次编译，
+    // 保证同一函数内同一语义始终用同一 op 号。映射由 seed 派生，运行时用同
+    // 一个 seed 重建反查表 vm_maps，从而正确解释字节码。
+    semToOpMaps;
+    constructor(rng, seed) {
         this.rng = rng;
+        this.semToOpMaps = [];
+        for (let vm = 0; vm < VM_COUNT; vm++) {
+            this.semToOpMaps.push(buildSemToOpMap(seed, vm, rng));
+        }
     }
     compileChunk(ast) {
         const func = this.newFunc(null, 0, true);
@@ -51,6 +60,9 @@ class Compiler {
             upvalues: [],
             parent: parent ? parent.scope : null,
         };
+        // v0.8：每个函数随机分配一个默认 VM。运行时 vm_execute 以 proto.vmId 起步，
+        // 之后由字节码内的 SWITCH_VM 在 VM 之间切换。攻击者必须同时逆向 3 套映射。
+        const vmId = Math.floor(this.rng() * VM_COUNT);
         const proto = {
             instructions: [],
             constants: [],
@@ -58,6 +70,7 @@ class Compiler {
             paramCount,
             isVararg,
             upvalues: [],
+            vmId,
         };
         return {
             scope,
@@ -68,6 +81,10 @@ class Compiler {
             labels: new Map(),
             pendingGotos: [],
             loopStack: [],
+            vmId,
+            currentVm: vmId,
+            insnsSinceSwitch: 0,
+            nextSwitchAt: 5 + Math.floor(this.rng() * 26), // 5..30
         };
     }
     // ---- Register management ----
@@ -85,14 +102,13 @@ class Compiler {
         }
     }
     getLocal(func, name) {
-        let scope = func.scope;
-        while (scope) {
-            const reg = scope.locals.get(name);
-            if (reg !== undefined)
-                return reg;
-            scope = scope.parent;
-        }
-        return null;
+        // v0.8 修复：只查当前函数作用域，不向上递归。
+        // 寄存器 VM 每个函数有独立寄存器文件，父层 local 必须经 upvalue 访问
+        // （resolveUpvalue → GETUPVAL_REAL / SETUPVAL_REAL）。之前这里向上递归，
+        // 导致 `count = count + 1`（count 是父层 local）被误判为本函数 local，
+        // 写入当前函数 R[count_reg] 而非父层 upvalue，counter 永远返回 0。
+        const reg = func.scope.locals.get(name);
+        return reg !== undefined ? reg : null;
     }
     // ---- Upvalue resolution ----
     // A variable referenced inside a function that is a local of an enclosing
@@ -142,15 +158,83 @@ class Compiler {
         func.proto.instructions.push({ op, A, B, C, D, mode });
         return idx;
     }
-    /** Emit an instruction for a semantic Op, picking a random alias. */
+    /** Emit an instruction for a semantic Op.
+     *  v0.8: 不再用全局 pickAlias（VM0 标准表），而是按 func.currentVm 查
+     *  semToOpMaps，得到当前 VM 下该语义对应的 op 号。同一语义在不同 VM
+     *  下编号不同 → 攻击者必须为每个 VM 各逆向一套映射。
+     *
+     *  在每 5-30 条语义指令之间随机插入 SWITCH_VM（切到另一个 VM）或死 VM
+     *  诱饵。SWITCH_VM 对控制流透明（只换 dispatch 表），因此插在任何基本块
+     *  边界都不影响跳转偏移：所有偏移在发射时按 live instructions.length 计算，
+     *  SWITCH_VM 作为普通指令参与计数。 */
     emitOp(func, sem, A, B, C, D, mode = 0) {
-        const alias = pickAlias(this.rng, sem);
-        return this.emit(func, alias, A, B, C, D, mode);
+        // v0.8: 周期性 VM 切换 / 死 VM 诱饵。仅对语义发射触发，SWITCH_VM/DEAD_VM
+        // 走 raw emit 不进这里，避免递归。
+        if (++func.insnsSinceSwitch >= func.nextSwitchAt) {
+            if (this.rng() < 0.25) {
+                // 死 VM 诱饵：不可达的 SWITCH_VM deadVm，currentVm 不变。
+                this.emitDeadVmDecoy(func);
+            }
+            else {
+                // 切到另一个 VM（与当前不同）。
+                let target = func.currentVm;
+                while (target === func.currentVm) {
+                    target = Math.floor(this.rng() * VM_COUNT);
+                }
+                this.emitSwitchVm(func, target);
+            }
+            func.insnsSinceSwitch = 0;
+            func.nextSwitchAt = 5 + Math.floor(this.rng() * 26); // 5..30
+        }
+        const opNum = this.semToOpMaps[func.currentVm].get(sem);
+        if (opNum === undefined) {
+            throw new Error(`emitOp: no op mapping for Op.${sem} in VM${func.currentVm}`);
+        }
+        return this.emit(func, opNum, A, B, C, D, mode);
+    }
+    /** v0.8: 发射 SWITCH_VM 指令。op 号 200 是保留号（不参与各 VM 的 op 映射），
+     *  运行时遇到 200 时把 current_vm 切到 C。随后 emitOp 用新 VM 的映射表。
+     *  该指令对控制流透明（不跳转），因此可以安全插在任何基本块边界。 */
+    emitSwitchVm(func, targetVm) {
+        func.currentVm = targetVm % VM_COUNT;
+        return this.emit(func, OP_SWITCH_VM, 0, 0, func.currentVm, 0, 0);
+    }
+    /** v0.8: 在 JUMP 源处恢复 VM 到 targetVm。
+     *  SWITCH_VM 会改变运行时 current_vm 全局状态。如果循环体内插了 SWITCH_VM，
+     *  回边 JUMP 会带着错误的 VM 落到循环头，导致循环头指令（按旧 VM 编码）被
+     *  新 VM 误解 → 反编译失败或运行时崩溃。
+     *  本方法在发射 JUMP 前确保 currentVm == targetVm，否则补一条 SWITCH_VM。 */
+    syncVmBeforeJump(func, targetVm) {
+        if (func.currentVm !== targetVm) {
+            this.emitSwitchVm(func, targetVm);
+        }
+    }
+    /** v0.8: 发射死 VM 诱饵区。
+     *  生成结构：JUMP → DEAD_VM(deadVm) → DEAD_VM(deadVm) → (真实代码继续)
+     *  JUMP 的 C = deadCount + 1，跳过整个死区使其中 SWITCH_VM/deadVm 永不执行。
+     *  静态分析看到 DEAD_VM 切到 deadVm（>= VM_COUNT，寄存器全是垃圾），但
+     *  无法轻易判定该区不可达。本方法用 raw emit，不走 emitOp 的切换计数器，
+     *  保证 JUMP 与其落点之间不被插入 SWITCH_VM。 */
+    emitDeadVmDecoy(func) {
+        const deadCount = 2;
+        const jumpOp = this.semToOpMaps[func.currentVm].get(Op.JUMP);
+        // JUMP C = deadCount + 1（落点 = jump + deadCount + 1，跳过 deadCount 条）。
+        this.emit(func, jumpOp, 0, 0, deadCount + 1, 0, 2);
+        const deadVm = DEAD_VM_IDS[Math.floor(this.rng() * DEAD_VM_IDS.length)];
+        for (let i = 0; i < deadCount; i++) {
+            this.emit(func, OP_DEAD_VM, 0, 0, deadVm, 0, 0);
+        }
     }
     // ---- Jump patching ----
     emitJump(func, sem, A, C) {
-        const idx = this.emitOp(func, sem, A, 0, C, 0, 2);
-        return idx;
+        // v0.8: JUMP 类指令走 raw emit，不走 emitOp 的计数器。
+        // 否则计数器可能在 syncVmBeforeJump 之后、JUMP 之前插入 SWITCH_VM，
+        // 破坏 JUMP 源/目标的 VM 一致性。
+        const opNum = this.semToOpMaps[func.currentVm].get(sem);
+        if (opNum === undefined) {
+            throw new Error(`emitJump: no op mapping for Op.${sem} in VM${func.currentVm}`);
+        }
+        return this.emit(func, opNum, A, 0, C, 0, 2);
     }
     patchJumps(func) {
         for (const { insnIdx, target } of func.jumpPatches) {
@@ -230,6 +314,12 @@ class Compiler {
                 this.compileBlock(func, stmt.block);
                 break;
             case "Break": {
+                // v0.8: break 跳到循环出口（位于回边 JUMP 之后，VM = loopStartVm）。
+                // 先 sync 到 loopStartVm 再发射 JUMP，保证落地 VM 一致。
+                if (func.loopStack.length > 0) {
+                    const top = func.loopStack[func.loopStack.length - 1];
+                    this.syncVmBeforeJump(func, top.loopStartVm);
+                }
                 // Emit JUMP — target will be patched by the enclosing loop
                 const breakIdx = this.emitJump(func, Op.JUMP, 0, 0);
                 if (func.loopStack.length > 0) {
@@ -239,10 +329,12 @@ class Compiler {
                 break;
             }
             case "Continue": {
-                // Emit JUMP back to loop start — target patched by enclosing loop
-                const contIdx = this.emitJump(func, Op.JUMP, 0, 0);
+                // v0.8: continue 跳回循环头（loopStart），VM = loopStartVm。
                 if (func.loopStack.length > 0) {
                     const top = func.loopStack[func.loopStack.length - 1];
+                    this.syncVmBeforeJump(func, top.loopStartVm);
+                    // Emit JUMP back to loop start — target patched by enclosing loop
+                    const contIdx = this.emitJump(func, Op.JUMP, 0, 0);
                     func.proto.instructions[contIdx].C = top.loopStart - contIdx;
                 }
                 break;
@@ -304,12 +396,25 @@ class Compiler {
                     this.compileExpr(func, value, reg);
                 }
                 else {
-                    // Global assignment: SETGLOBAL
-                    const constIdx = this.addConst(func, { type: "string", value: target.name });
-                    const tempReg = this.allocReg(func);
-                    this.compileExpr(func, value, tempReg);
-                    this.emitOp(func, Op.SETGLOBAL, tempReg, constIdx, 0, 0, 0);
-                    this.freeReg(func, tempReg);
+                    // v0.8 修复：闭合捕获的 upvalue 写回（SETUPVAL_REAL）。
+                    // 之前只判 local / global，导致 `count = count + 1`（count 是父层
+                    // local 被闭包捕获）落到 SETGLOBAL 分支，把结果写到 env 表里，
+                    // upvalue 真值永远不变 → counter 返回 0,0,0。
+                    const upvalIdx = this.resolveUpvalue(func, target.name);
+                    if (upvalIdx !== null) {
+                        const tempReg = this.allocReg(func);
+                        this.compileExpr(func, value, tempReg);
+                        this.emitOp(func, Op.SETUPVAL_REAL, tempReg, upvalIdx, 0, 0, 0);
+                        this.freeReg(func, tempReg);
+                    }
+                    else {
+                        // Global assignment: SETGLOBAL
+                        const constIdx = this.addConst(func, { type: "string", value: target.name });
+                        const tempReg = this.allocReg(func);
+                        this.compileExpr(func, value, tempReg);
+                        this.emitOp(func, Op.SETGLOBAL, tempReg, constIdx, 0, 0, 0);
+                        this.freeReg(func, tempReg);
+                    }
                 }
             }
             else if (target.t === "Index") {
@@ -340,15 +445,29 @@ class Compiler {
         if (stmt.t !== "If")
             return;
         const jumpTargets = [];
+        // v0.8: 记录 if 入口 VM。所有分支的 TEST_FALSE 和 end-JUMP 都以此 VM
+        // 为基准，确保所有路径在 if 结束后汇聚到同一 VM。否则 then-branch 里的
+        // SWITCH_VM 会让 end-JUMP 带着错误的 VM 落到 if 之后的代码。
+        const preIfVm = func.currentVm;
         for (let i = 0; i < stmt.branches.length; i++) {
             const branch = stmt.branches[i];
+            // v0.8: 每个分支头部 sync 到 preIfVm。
+            // 上一分支的 end-JUMP 之前已 syncVmBeforeJump(preIfVm)，但 emitOp 计数器
+            // 可能在 end-JUMP 后插入 SWITCH_VM。这里强制恢复。
+            this.syncVmBeforeJump(func, preIfVm);
             const condReg = this.allocReg(func);
             this.compileExpr(func, branch.cond, condReg);
+            // v0.8: 条件表达式编译过程中 emitOp 计数器可能插入 SWITCH_VM，改变
+            // currentVm。TEST_FALSE 的跳转目标（下一分支头部）在 preIfVm 中，所以
+            // TEST_FALSE 本身也必须在 preIfVm 中。此处 re-sync 保证一致。
+            this.syncVmBeforeJump(func, preIfVm);
             // TEST_FALSE: if not cond then jump to next branch/end
             const testIdx = this.emitJump(func, Op.TEST_FALSE, condReg, 0);
             this.freeReg(func, condReg);
             // Compile the then-block
             this.compileBlock(func, branch.block);
+            // v0.8: end-JUMP 之前 sync 到 preIfVm，确保落到 if 之后时 VM 正确。
+            this.syncVmBeforeJump(func, preIfVm);
             // JUMP to end (skip else/elseif blocks)
             const endJumpIdx = this.emitJump(func, Op.JUMP, 0, 0);
             jumpTargets.push(endJumpIdx);
@@ -357,8 +476,13 @@ class Compiler {
         }
         // Else block
         if (stmt.else) {
+            // v0.8: else 分支入口由最后一条 TEST_FALSE 跳入，VM = preIfVm。
+            this.syncVmBeforeJump(func, preIfVm);
             this.compileBlock(func, stmt.else);
         }
+        // v0.8: 所有路径汇聚点。end-JUMP 带 preIfVm 落地；else/无 else 直落到此。
+        // 直落路径的 VM 可能被 else 体内的 SWITCH_VM 改过，需 sync 回 preIfVm。
+        this.syncVmBeforeJump(func, preIfVm);
         // Patch all end-jumps to here
         const endPos = func.proto.instructions.length;
         for (const idx of jumpTargets) {
@@ -370,14 +494,21 @@ class Compiler {
         if (stmt.t !== "While")
             return;
         const loopStart = func.proto.instructions.length;
-        func.loopStack.push({ loopStart, breakPatches: [] });
+        const loopStartVm = func.currentVm;
+        func.loopStack.push({ loopStart, loopStartVm, breakPatches: [] });
         const condReg = this.allocReg(func);
         this.compileExpr(func, stmt.cond, condReg);
+        // v0.8: 条件编译中 emitOp 可能插入 SWITCH_VM。exit TEST_FALSE 的目标
+        // （循环出口）在 loopStartVm 中，TEST_FALSE 也必须如此。
+        this.syncVmBeforeJump(func, loopStartVm);
         // TEST_FALSE: if not cond then jump past loop
         const exitTestIdx = this.emitJump(func, Op.TEST_FALSE, condReg, 0);
         this.freeReg(func, condReg);
         // Loop body
         this.compileBlock(func, stmt.block);
+        // v0.8: 回边 JUMP 前先 sync 到 loopStartVm。循环体内的 SWITCH_VM 可能
+        // 改变了 currentVm，回边带着新 VM 落到按旧 VM 编码的循环头会导致解释错乱。
+        this.syncVmBeforeJump(func, loopStartVm);
         // JUMP back to loop start
         this.emitJump(func, Op.JUMP, 0, loopStart - func.proto.instructions.length);
         // Patch exit test + all breaks
@@ -393,12 +524,18 @@ class Compiler {
         if (stmt.t !== "Repeat")
             return;
         const loopStart = func.proto.instructions.length;
-        func.loopStack.push({ loopStart, breakPatches: [] });
+        const loopStartVm = func.currentVm;
+        func.loopStack.push({ loopStart, loopStartVm, breakPatches: [] });
         // Loop body
         this.compileBlock(func, stmt.block);
+        // v0.8: 回边 TEST_FALSE 前先 sync 到 loopStartVm。
+        this.syncVmBeforeJump(func, loopStartVm);
         // Evaluate condition
         const condReg = this.allocReg(func);
         this.compileExpr(func, stmt.cond, condReg);
+        // v0.8: 条件编译中 emitOp 可能插入 SWITCH_VM。回边 TEST_FALSE 跳回
+        // loopStart（在 loopStartVm 中），TEST_FALSE 也必须如此。
+        this.syncVmBeforeJump(func, loopStartVm);
         // TEST_FALSE: if not cond then jump back to loop start
         // Jump convention: C = target - idx (same as JUMP/TEST).
         this.emitJump(func, Op.TEST_FALSE, condReg, loopStart - func.proto.instructions.length);
@@ -436,15 +573,23 @@ class Compiler {
         // Use mode=2 (signed C) so negative offsets encode correctly.
         const prepIdx = this.emitOp(func, Op.FORPREP, baseReg, 0, 0, 0, 2);
         const loopBodyStart = func.proto.instructions.length;
-        func.loopStack.push({ loopStart: loopBodyStart, breakPatches: [] });
+        // v0.8: 记录循环头 VM。FORPREP 的前向跳转落到 FORLOOP，二者必须同 VM；
+        // FORLOOP 的回边跳到 loopBodyStart，也必须同 VM。loopBodyStartVm 在循环体
+        // 第一条指令之前记录，作为回边 sync 的基准。
+        const loopBodyStartVm = func.currentVm;
+        func.loopStack.push({ loopStart: loopBodyStart, loopStartVm: loopBodyStartVm, breakPatches: [] });
         // Set counter = current value (redundant w/ FORLOOP's R[A+3]=R[A], but
         // keeps a clear register-init point for the body).
         this.emitOp(func, Op.MOVE, counterReg, baseReg, 0, 0, 0);
         // Loop body
         this.compileBlock(func, stmt.block);
+        // v0.8: FORLOOP 是回边，跳回 loopBodyStart。循环体内的 SWITCH_VM 可能改变
+        // currentVm，必须先 sync 到 loopBodyStartVm。用 emitJump（raw）发射，避免
+        // emitOp 计数器在 sync 与 FORLOOP 之间插入 SWITCH_VM 破坏一致性。
+        this.syncVmBeforeJump(func, loopBodyStartVm);
         // FORLOOP: R[baseReg] += R[stepReg]; if within bounds, R[A+3]=R[A] and
         // jump back to body start (loopBodyStart). Jump convention: C = target - idx.
-        const forloopIdx = this.emitOp(func, Op.FORLOOP, baseReg, 0, loopBodyStart - func.proto.instructions.length, 0, 2);
+        const forloopIdx = this.emitJump(func, Op.FORLOOP, baseReg, loopBodyStart - func.proto.instructions.length);
         // Patch FORPREP to jump forward to FORLOOP (skip body on first pass).
         func.proto.instructions[prepIdx].C = forloopIdx - prepIdx;
         // Patch all breaks
@@ -523,13 +668,18 @@ class Compiler {
         // the full layout is known — fix it now).
         func.scope.locals.set(stmt.names[0], callBase);
         const loopStart = func.proto.instructions.length;
-        func.loopStack.push({ loopStart, breakPatches: [] });
+        // v0.8: 记录循环头 VM。回边 JUMP 跳回 loopStart，必须 sync 到此 VM。
+        const loopStartVm = func.currentVm;
+        func.loopStack.push({ loopStart, loopStartVm, breakPatches: [] });
         // Each iteration: MOVE iterator/state/ctrl into call positions, then call.
         this.emitOp(func, Op.MOVE, callBase, iterReg, 0, 0, 0); // callee
         this.emitOp(func, Op.MOVE, callBase + 1, stateReg, 0, 0, 0); // state arg
         this.emitOp(func, Op.MOVE, callBase + 2, ctrlReg, 0, 0, 0); // control arg
         // CALL_RET_N(callBase, 2, numVars) → results in callBase..callBase+numVars-1
         this.emitOp(func, Op.CALL_RET_N, callBase, 2, numVars, 0, 0);
+        // v0.8: 上述 emitOp 序列可能触发计数器插入 SWITCH_VM，改变 currentVm。
+        // exit TEST_FALSE 的目标（循环出口）在 loopStartVm 中，需 re-sync。
+        this.syncVmBeforeJump(func, loopStartVm);
         // Test first variable: if nil/false, exit loop. Save the index so we can
         // patch the jump target to the loop exit below (emitJump leaves C=0).
         const exitTestIdx = this.emitJump(func, Op.TEST_FALSE, callBase, 0);
@@ -537,6 +687,9 @@ class Compiler {
         this.emitOp(func, Op.MOVE, ctrlReg, callBase, 0, 0, 0);
         // Loop body
         this.compileBlock(func, stmt.block);
+        // v0.8: 回边 JUMP 前先 sync 到 loopStartVm。循环体内的 SWITCH_VM 可能
+        // 改变了 currentVm，回边带着新 VM 落到按旧 VM 编码的循环头会导致解释错乱。
+        this.syncVmBeforeJump(func, loopStartVm);
         // JUMP back to the MOVE + call sequence
         this.emitJump(func, Op.JUMP, 0, loopStart - func.proto.instructions.length);
         // Patch exit test + all breaks to jump here (past the loop)
@@ -625,19 +778,21 @@ class Compiler {
     compileCallStmt(func, stmt) {
         if (stmt.t !== "Call")
             return;
+        // v0.8 修复：CALL_RET_N 要求 callee + args 占用连续寄存器 R[A..A+B]。
+        // 之前用 argBase = allocReg()，若 callee 表达式编译时分配过临时寄存器，
+        // argBase 会落在 calleeReg 之上的某个空位而非 calleeReg+1，导致运行时
+        // 从 R[A+1] 取不到参数（fib 递归 n 为 nil → compare nil < number）。
         const calleeReg = this.allocReg(func);
         this.compileExpr(func, stmt.callee, calleeReg);
-        // Compile args into consecutive registers
-        const argBase = this.allocReg(func);
+        const argBase = calleeReg + 1;
+        func.scope.nextReg = Math.max(func.scope.nextReg, argBase + stmt.args.length);
         for (let i = 0; i < stmt.args.length; i++) {
-            const reg = argBase + i;
-            func.scope.nextReg = Math.max(func.scope.nextReg, reg + 1);
-            this.compileExpr(func, stmt.args[i], reg);
+            this.compileExpr(func, stmt.args[i], argBase + i);
         }
         // CALL_RET_N with 0 results (statement context)
         this.emitOp(func, Op.CALL_RET_N, calleeReg, stmt.args.length, 0, 0, 0);
-        this.freeReg(func, argBase);
-        this.freeReg(func, calleeReg);
+        // Reclaim the entire callee+args block
+        func.scope.nextReg = calleeReg;
     }
     compileMethodStmt(func, stmt) {
         if (stmt.t !== "Method")
@@ -932,22 +1087,26 @@ class Compiler {
     compileCallExpr(func, expr, destReg) {
         if (expr.t !== "Call")
             return;
-        const calleeReg = (destReg !== func.scope.nextReg - 1) ? destReg : this.allocReg(func);
+        // v0.8 修复：CALL_RET_N 要求 callee + args 占用连续寄存器 R[A..A+B]。
+        // 总是在栈顶分配 callee，确保 args 可紧跟其后；结果写回 destReg。
+        // 之前复用 destReg 作 calleeReg 时，若 destReg 上方还有已分配寄存器
+        // （如 binop 的 rhsReg），argBase=allocReg() 会跳过它们，导致运行时
+        // 从 R[A+1] 取不到参数。
+        const calleeReg = this.allocReg(func);
         this.compileExpr(func, expr.callee, calleeReg);
-        const argBase = this.allocReg(func);
+        const argBase = calleeReg + 1;
+        func.scope.nextReg = Math.max(func.scope.nextReg, argBase + expr.args.length);
         for (let i = 0; i < expr.args.length; i++) {
-            const reg = argBase + i;
-            func.scope.nextReg = Math.max(func.scope.nextReg, reg + 1);
-            this.compileExpr(func, expr.args[i], reg);
+            this.compileExpr(func, expr.args[i], argBase + i);
         }
-        // CALL_RET_N with 1 result to destReg
+        // CALL_RET_N with 1 result to calleeReg
         this.emitOp(func, Op.CALL_RET_N, calleeReg, expr.args.length, 1, 0, 0);
-        // If calleeReg was separate from destReg, move result
+        // Move result to destReg if needed
         if (calleeReg !== destReg) {
             this.emitOp(func, Op.MOVE, destReg, calleeReg, 0, 0, 0);
-            this.freeReg(func, calleeReg);
         }
-        this.freeReg(func, argBase);
+        // Reclaim the entire callee+args block
+        func.scope.nextReg = calleeReg;
     }
     // ---- Method expression ----
     compileMethodExpr(func, expr, destReg) {

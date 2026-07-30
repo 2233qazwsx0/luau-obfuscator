@@ -224,6 +224,9 @@ export function serializeFunction(func: FuncPrototype): string {
     writeU8(buf, uv.index);
   }
 
+  // v0.8 多 VM：函数默认 VM 编号（0/1/2）。undefined → 0（向后兼容）。
+  writeU8(buf, (func.vmId ?? 0) & 0xFF);
+
   // Convert byte array to binary string
   return Buffer.from(buf).toString("binary");
 }
@@ -347,6 +350,10 @@ export function deserializeFunction(data: string, offset: number = 0): [FuncProt
     upvalues.push({ fromStack: fromStack !== 0, index: idx });
   }
 
+  // v0.8 多 VM：函数默认 VM 编号。
+  let vmId: number;
+  [vmId, pos] = readU8(bytes, pos);
+
   return [{
     instructions,
     constants,
@@ -354,6 +361,7 @@ export function deserializeFunction(data: string, offset: number = 0): [FuncProt
     paramCount,
     isVararg: varargFlag !== 0,
     upvalues,
+    vmId,
   }, pos - offset];
 }
 
