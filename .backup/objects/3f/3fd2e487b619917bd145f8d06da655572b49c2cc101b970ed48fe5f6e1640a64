@@ -1,0 +1,64 @@
+import { lex } from './dist/src/parser/lexer.js';
+import { parse } from './dist/src/parser/parser.js';
+
+// Test 1: method call with chained Index.Method
+const code1 = 'fadeOutBg.Completed:Connect(function() notif:Destroy() end)';
+try {
+  const tokens = lex(code1);
+  const ast = parse(tokens);
+  console.log('[test1] PASSED: parse OK');
+  console.log('[test1] first stmt type:', ast.body[0].t);
+  console.log('[test1] method name:', ast.body[0].name);
+} catch(e) {
+  console.log('[test1] FAILED:', e.message);
+}
+
+// Test 2: multiple statements with method calls
+const code2 = [
+  'local x = 1',
+  'fadeOutBg.Completed:Connect(function()',
+  '    notif:Destroy()',
+  'end)',
+].join('\n');
+try {
+  const tokens = lex(code2);
+  const ast = parse(tokens);
+  console.log('[test2] PASSED: parse OK');
+} catch(e) {
+  console.log('[test2] FAILED:', e.message);
+}
+
+// Test 3: chained method call after method call
+const code3 = 'game:GetService("TweenService"):Create(r, TweenInfo.new(0.1), {CFrame = r.CFrame + r.CFrame.LookVector * 17})';
+try {
+  const tokens = lex(code3);
+  const ast = parse(tokens);
+  console.log('[test3] PASSED: parse OK');
+  console.log('[test3] type:', ast.body[0].t);
+} catch(e) {
+  console.log('[test3] FAILED:', e.message);
+}
+
+// Test 4: obj:method() where obj is bare ident
+const code4 = 'notif:Destroy()';
+try {
+  const tokens = lex(code4);
+  const ast = parse(tokens);
+  console.log('[test4] PASSED: parse OK');
+  console.log('[test4] type:', ast.body[0].t);
+  console.log('[test4] name:', ast.body[0].name);
+} catch(e) {
+  console.log('[test4] FAILED:', e.message);
+}
+
+// Test 5: the full combo.lua.bak file
+import { readFileSync as readFileSync } from 'node:fs';
+try {
+  const src = readFileSync('examples/combo.lua.bak', 'utf8');
+  const tokens = lex(src);
+  const ast = parse(tokens);
+  console.log('[test5] PASSED: combo.lua.bak parse OK');
+  console.log('[test5] body.length:', ast.body.length);
+} catch(e) {
+  console.log('[test5] FAILED:', e.message);
+}
