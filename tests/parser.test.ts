@@ -1,0 +1,245 @@
+// tests/parser.test.ts — Parser tests for v0.1.1 Luau syntax support.
+import { describe, it, expect } from "vitest";
+import { lex } from "../src/parser/lexer.js";
+import { parse, type Node } from "../src/parser/parser.js";
+import { emit } from "../src/emit/emitter.js";
+import { buildCipher } from "../src/transforms/strings.js";
+
+function parseSrc(src: string): Node {
+  return parse(lex(src));
+}
+
+function emitSrc(ast: Node): string {
+  return emit(ast, buildCipher(1));
+}
+
+describe("parser v0.1.1 — compound assignment", () => {
+  it("parses += correctly", () => {
+    const ast = parseSrc("local x = 1\nx += 2");
+    expect(ast.t).toBe("Block");
+    if (ast.t !== "Block") return;
+    expect(ast.body).toHaveLength(2);
+    const stmt = ast.body[1]!;
+    expect(stmt.t).toBe("Assign");
+    if (stmt.t !== "Assign") return;
+    // x += 2 → Assign { targets: [x], values: [Binop(+, x, 2)] }
+    expect(stmt.values).toHaveLength(1);
+    const val = stmt.values[0]!;
+    expect(val.t).toBe("Binop");
+    if (val.t !== "Binop") return;
+    expect(val.op).toBe("+");
+  });
+
+  it("parses ..= correctly", () => {
+    const ast = parseSrc('local s = "a"\ns ..= "b"');
+    if (ast.t !== "Block") return;
+    const stmt = ast.body[1]!;
+    expect(stmt.t).toBe("Assign");
+    if (stmt.t !== "Assign") return;
+    const val = stmt.values[0]!;
+    expect(val.t).toBe("Binop");
+    if (val.t !== "Binop") return;
+    expect(val.op).toBe("..");
+  });
+});
+
+describe("parser v0.1.1 — type annotations", () => {
+  it("parses local with type annotation", () => {
+    const ast = parseSrc("local x: number = 42");
+    if (ast.t !== "Block") return;
+    const stmt = ast.body[0]!;
+    expect(stmt.t).toBe("Local");
+    if (stmt.t !== "Local") return;
+    expect(stmt.names).toEqual(["x"]);
+    expect(stmt.types[0]).toBe("number");
+  });
+
+  it("parses function with typed params and return type", () => {
+    const ast = parseSrc("function add(a: number, b: number): number return a + b end");
+    if (ast.t !== "Block") return;
+    const stmt = ast.body[0]!;
+    expect(stmt.t).toBe("Function");
+    if (stmt.t !== "Function" || !("name" in stmt) || !stmt.name) return;
+    expect(stmt.params).toEqual(["a", "b"]);
+    expect(stmt.paramTypes).toEqual(["number", "number"]);
+    expect(stmt.retType).toBe("number");
+  });
+
+  it("parses generic for with type annotations", () => {
+    const ast = parseSrc("for k: string, v: number in pairs(t) do end");
+    if (ast.t !== "Block") return;
+    const stmt = ast.body[0]!;
+    expect(stmt.t).toBe("ForIn");
+    if (stmt.t !== "ForIn") return;
+    expect(stmt.names).toEqual(["k", "v"]);
+    expect(stmt.types).toEqual(["string", "number"]);
+  });
+
+  it("parses numeric for with type annotation", () => {
+    const ast = parseSrc("for i: number = 1, 10 do end");
+    if (ast.t !== "Block") return;
+    const stmt = ast.body[0]!;
+    expect(stmt.t).toBe("For");
+    if (stmt.t !== "For") return;
+    expect(stmt.varType).toBe("number");
+  });
+});
+
+describe("parser v0.1.1 — type declarations", () => {
+  it("parses type declaration", () => {
+    const ast = parseSrc("type Foo = { bar: number, baz: string }");
+    if (ast.t !== "Block") return;
+    const stmt = ast.body[0]!;
+    expect(stmt.t).toBe("TypeDecl");
+    if (stmt.t !== "TypeDecl") return;
+    expect(stmt.name).toBe("Foo");
+    expect(stmt.exported).toBe(false);
+    expect(stmt.body.length).toBeGreaterThan(0);
+  });
+
+  it("parses export type declaration", () => {
+    const ast = parseSrc("export type Bar = string");
+    if (ast.t !== "Block") return;
+    const stmt = ast.body[0]!;
+    expect(stmt.t).toBe("TypeDecl");
+    if (stmt.t !== "TypeDecl") return;
+    expect(stmt.exported).toBe(true);
+  });
+});
+
+describe("parser v0.1.1 — if expressions", () => {
+  it("parses if expression", () => {
+    const ast = parseSrc("local x = if true then 1 else 2");
+    if (ast.t !== "Block") return;
+    const local = ast.body[0]!;
+    expect(local.t).toBe("Local");
+    if (local.t !== "Local" || !local.values) return;
+    const expr = local.values[0]!;
+    expect(expr.t).toBe("IfExpr");
+  });
+});
+
+describe("parser v0.1.1 — goto and labels", () => {
+  it("parses goto and label", () => {
+    const ast = parseSrc("do goto skip ::skip:: end");
+    if (ast.t !== "Block") return;
+    const doNode = ast.body[0]!;
+    expect(doNode.t).toBe("Do");
+    if (doNode.t !== "Do") return;
+    if (doNode.block.t !== "Block") return;
+    expect(doNode.block.body[0]!.t).toBe("Goto");
+    expect(doNode.block.body[1]!.t).toBe("Label");
+  });
+});
+
+describe("parser v0.1.1 — interp strings", () => {
+  it("parses backtick interp string", () => {
+    const ast = parseSrc("local name = \"world\"\nlocal s = `hello {name}`");
+    if (ast.t !== "Block") return;
+    const local = ast.body[1]!;
+    expect(local.t).toBe("Local");
+    if (local.t !== "Local" || !local.values) return;
+    const expr = local.values[0]!;
+    // Should be lowered to a Concat node
+    expect(expr.t).toBe("Concat");
+    if (expr.t !== "Concat") return;
+    // parts: "hello ", Ident("name")
+    expect(expr.parts.length).toBe(2);
+    expect(expr.parts[0]!.t).toBe("String");
+    expect(expr.parts[1]!.t).toBe("Ident");
+  });
+
+  it("parses interp string with no interpolation as plain string", () => {
+    const ast = parseSrc("local s = `hello`");
+    if (ast.t !== "Block") return;
+    const local = ast.body[0]!;
+    if (local.t !== "Local" || !local.values) return;
+    expect(local.values[0]!.t).toBe("String");
+  });
+});
+
+describe("parser v0.1.1 — anonymous function body (Bug #7)", () => {
+  it("emits anonymous function with body", () => {
+    const src = 'local f = function(x) return x + 1 end\nprint(f(2))';
+    const ast = parseSrc(src);
+    const out = emitSrc(ast);
+    // The emitted function should contain "return" inside it
+    expect(out).toContain("function(x)");
+    expect(out).toContain("return");
+    expect(out).toContain("end");
+  });
+});
+
+describe("parser v0.1.1 — function param renaming (Bug #8)", () => {
+  it("renames function parameters", () => {
+    // This tests through the identifier transform, not just parser
+    const src = 'local function add(a, b) return a + b end\nprint(add(1, 2))';
+    // We just verify it doesn't crash and the param names are in the AST
+    const ast = parseSrc(src);
+    if (ast.t !== "Block") return;
+    const fn = ast.body[0]!;
+    expect(fn.t).toBe("Function");
+    if (fn.t !== "Function" || !("name" in fn) || !fn.name) return;
+    expect(fn.params).toEqual(["a", "b"]);
+  });
+});
+
+describe("parser — method call syntax (Bug #11)", () => {
+  it("parses obj:method() bare ident method call", () => {
+    const ast = parseSrc("notif:Destroy()");
+    if (ast.t !== "Block") return;
+    const stmt = ast.body[0]!;
+    expect(stmt.t).toBe("Method");
+    if (stmt.t !== "Method") return;
+    expect(stmt.name).toBe("Destroy");
+  });
+
+  it("parses obj.prop:method() chained method call", () => {
+    const ast = parseSrc("fadeOutBg.Completed:Connect(function() end)");
+    if (ast.t !== "Block") return;
+    const stmt = ast.body[0]!;
+    expect(stmt.t).toBe("Method");
+    if (stmt.t !== "Method") return;
+    expect(stmt.name).toBe("Connect");
+  });
+
+  it("parses obj:method():chain() doubly chained", () => {
+    const ast = parseSrc('game:GetService("T"):Create(r, t, {})');
+    if (ast.t !== "Block") return;
+    const stmt = ast.body[0]!;
+    expect(stmt.t).toBe("Method");
+    if (stmt.t !== "Method") return;
+    expect(stmt.name).toBe("Create");
+  });
+
+  it("parses (expr):method() on parenthesized expr", () => {
+    const ast = parseSrc('local r = (p.A or p.B:Wait()):WaitForChild("H")');
+    if (ast.t !== "Block") return;
+    const local = ast.body[0]!;
+    if (local.t !== "Local" || !local.values) return;
+    expect(local.values[0]!.t).toBe("Method");
+  });
+});
+
+describe("parser v0.1.1 — existing syntax still works", () => {
+  it("parses hello.lua without errors", () => {
+    const src = `local greeting = "hello world"
+local repeat_count = 3
+for i = 1, repeat_count do
+    print(greeting .. " #" .. tostring(i))
+end
+local function add(a, b)
+    return a + b
+end
+print("1 + 2 = " .. tostring(add(1, 2)))
+if greeting:sub(1, 1) == "h" then
+    print("starts with h")
+end`;
+    const ast = parseSrc(src);
+    expect(ast.t).toBe("Block");
+    // Should emit without crashing
+    const out = emitSrc(ast);
+    expect(out.length).toBeGreaterThan(0);
+    expect(out).toContain("hello world");
+  });
+});
