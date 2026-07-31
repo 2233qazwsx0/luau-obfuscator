@@ -385,6 +385,11 @@ class Compiler {
     func.proto.subFunctions = func.subFuncs;
     func.proto.upvalues = func.scope.upvalues;
 
+    // v0.12 Feature #4: 寄存器窗口化。nextReg 是本函数实际使用过的最高
+    // 寄存器槽位 + 1（含参数 + 局部 + 临时）。运行时据此 pre-size regs 表，
+    // 避免 256 槽浪费；大多数脚本函数 ≤ 10 个局部变量。
+    func.proto.regCount = func.scope.nextReg;
+
     // v0.6 F4 / v0.11 F6: 每个 proto 独立的指令加密 seed。
     // insnCrypt 决定模式：f6 (默认) → mode=1 + IV；f4 → mode=0；off → 不设 seed。
     if (this.insnCrypt !== "off") {

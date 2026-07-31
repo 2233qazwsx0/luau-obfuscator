@@ -43,11 +43,17 @@
 //   [numUpvalues: uint8]
 //   for each upvalue: [fromStack: uint8][index: uint8]
 //   [vmId: uint8]
-//   [hasInsnSeed: uint8]       -- v0.6 F4 (0/1)
-//   if hasInsnSeed: [insnSeed: uint32 LE]
+//   [hasInsnSeed: uint8]       -- v0.6 F4 / v0.11 F6 (0/1)
+//   if hasInsnSeed:
+//     [insnSeed: uint32 LE]
+//     [insnCryptMode: uint8]   -- v0.11 F6 (0=F4 legacy, 1=F6 new). 旧 proto 无此字节
+//                                  → 反序列化时检测到 end-of-buffer 默认 F4。
+//     if insnCryptMode == 1 (F6):
+//       [ivB8: uint32 LE]      -- CBC 初始向量
+//       [ivB9: uint32 LE]
 //
 // All multi-byte integers are written little-endian to match the reference's aj().
-import { mulberry32 } from "../util/prng.js";
+import { INSN_CRYPT_F4, INSN_CRYPT_F6, f4Keystream, f6Encrypt, f6Decrypt, } from "./insncrypt.js";
 // ---- Bit extraction helpers (mirror reference's a8 function) ----
 /** Extract bits [start, start+width-1] from a 32-bit integer (1-indexed, like reference). */
 export function extractBits(value, start, width) {
@@ -130,6 +136,52 @@ function writeU8(buf, value) {
     buf.push(value & 0xFF);
 }
 /**
+ * v0.12 Feature #5: 写入 zigzag + LEB128 变长整数。
+ *   zigzag: 0→0, -1→1, 1→2, -2→3, 2→4 ... 让小负数也只占 1 字节。
+ *   LEB128: 每 7 bit 一字节，MSB=1 表示后续还有字节。
+ *   |n| <= 63 → 1 字节；|n| <= 8191 → 2 字节；|n| <= 2^20 → 3 字节 ...
+ *   支持范围：[-2^31, 2^31-1]（32-bit signed）。超出范围返回 false 不写入。
+ *   与 runtime/vm-runtime.template.lua 的 read_varint 完全对齐。
+ *   返回 true 表示成功写入；false 表示值超出 varint 范围（调用方应回退 f64）。
+ */
+function writeVarint(buf, value) {
+    if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+        return false;
+    }
+    // zigzag: (n << 1) ^ (n >> 31)，对 32-bit 范围安全。
+    const zz = ((value << 1) ^ (value >> 31)) >>> 0;
+    let v = zz;
+    while (v >= 0x80) {
+        buf.push((v & 0x7F) | 0x80);
+        v = v >>> 7;
+    }
+    buf.push(v & 0x7F);
+    return true;
+}
+/**
+ * v0.12 Feature #5: 读取 zigzag + LEB128 变长整数。
+ *   返回 [value, newOffset]。与 writeVarint 对称。
+ */
+function readVarint(bytes, offset) {
+    let v = 0;
+    let shift = 0;
+    let pos = offset;
+    while (true) {
+        const b = bytes[pos];
+        pos++;
+        v |= (b & 0x7F) << shift;
+        if ((b & 0x80) === 0)
+            break;
+        shift += 7;
+        if (shift > 35)
+            break; // 防御：最多 5 字节（35 bit > 32 bit + sign）
+    }
+    // zigzag 逆变换：(v >>> 1) ^ -(v & 1)
+    const zz = v >>> 0;
+    const n = (zz >>> 1) ^ -(zz & 1);
+    return [n, pos];
+}
+/**
  * Write an IEEE 754 double (8 bytes, little-endian) to the buffer.
  */
 function writeF64(buf, value) {
@@ -160,6 +212,13 @@ function writeString(buf, value) {
  * Serialize a constant entry to the bytecode buffer.
  * If `blind` is provided and applies to this entry, the stored value
  * is blinded (F3): numbers become (value + k2) = k1, strings become XOR bytes.
+ *
+ * v0.12 Feature #5: 数字常量在「无 num_split 盲化 + 32-bit 整数」时改用 tag 3
+ * + zigzag/LEB128 varint 编码（小整数 1 字节）。否则回退到 tag 2 + f64。
+ *   tag 0: string  (len-prefixed)
+ *   tag 1: bool    (1 byte)
+ *   tag 2: number  (f64, 8 bytes) — 旧格式 / 浮点 / 盲化数值
+ *   tag 3: number  (varint, 1-5 bytes) — 32-bit 整数压缩格式
  */
 function writeConstant(buf, entry, blind) {
     switch (entry.type) {
@@ -187,15 +246,27 @@ function writeConstant(buf, entry, blind) {
             writeU8(buf, 1);
             writeU8(buf, entry.value ? 1 : 0);
             break;
-        case "number":
-            writeU8(buf, 2);
+        case "number": {
+            // v0.12 Feature #5: 无 num_split 盲化且为 32-bit 整数 → tag 3 + varint。
+            // 盲化路径下 stored = value + k2，通常非整数，必须保留 tag 2 + f64。
             if (blind && blind.kind === "num_split") {
+                writeU8(buf, 2);
                 writeF64(buf, entry.value + blind.k2); // stored = k1
             }
             else {
-                writeF64(buf, entry.value);
+                const tmp = [];
+                if (writeVarint(tmp, entry.value)) {
+                    writeU8(buf, 3);
+                    for (const b of tmp)
+                        buf.push(b);
+                }
+                else {
+                    writeU8(buf, 2);
+                    writeF64(buf, entry.value);
+                }
             }
             break;
+        }
     }
 }
 /**
@@ -205,26 +276,51 @@ function writeConstant(buf, entry, blind) {
  */
 export function serializeFunction(func) {
     const buf = [];
-    // ---- F4 pre-compute instruction XOR keystream ----
+    // ---- F4/F6 pre-compute instruction encryption keystream ----
+    // v0.11 F6: per-IP keystream + per-IP ROL + CBC chaining + IV。
+    //   - insnCryptMode === 1 (F6)：用 f6Encrypt 整体加密 (b8, b9) 数组。
+    //   - insnCryptMode === 0 / undefined (F4)：保持 v0.6 行为，单 mulberry32 流 XOR。
+    //   - insnSeed === undefined：不加密，明文写指令（用于调试 / 测试）。
     const numInsn = func.instructions.length;
-    let insnKeys = null;
-    if (func.insnSeed !== undefined) {
-        const rng = mulberry32(func.insnSeed >>> 0);
-        insnKeys = new Array(numInsn * 2);
-        for (let i = 0; i < numInsn * 2; i++)
-            insnKeys[i] = Math.floor(rng() * 0x100000000) >>> 0;
+    const hasSeed = func.insnSeed !== undefined;
+    const cryptMode = hasSeed ? (func.insnCryptMode ?? INSN_CRYPT_F4) : INSN_CRYPT_F4;
+    const isF6 = hasSeed && cryptMode === INSN_CRYPT_F6 && func.insnIv !== undefined;
+    // 先把每条指令编码成 (plainB8, plainB9)。
+    const plainB8 = new Array(numInsn);
+    const plainB9 = new Array(numInsn);
+    for (let i = 0; i < numInsn; i++) {
+        const [b8, b9] = encodeInstruction(func.instructions[i]);
+        plainB8[i] = b8;
+        plainB9[i] = b9;
+    }
+    // 计算最终写入 buffer 的 (encB8, encB9)。
+    let encB8;
+    let encB9;
+    if (isF6) {
+        const r = f6Encrypt(plainB8, plainB9, func.insnSeed, func.insnIv);
+        encB8 = r.encB8;
+        encB9 = r.encB9;
+    }
+    else if (hasSeed) {
+        // F4：单 mulberry32 流 XOR（保持 v0.6 行为）。
+        const { k8, k9 } = f4Keystream(func.insnSeed, numInsn);
+        encB8 = new Array(numInsn);
+        encB9 = new Array(numInsn);
+        for (let i = 0; i < numInsn; i++) {
+            encB8[i] = ((plainB8[i] >>> 0) ^ k8[i]) >>> 0;
+            encB9[i] = ((plainB9[i] >>> 0) ^ k9[i]) >>> 0;
+        }
+    }
+    else {
+        // 无加密：直接写明文。
+        encB8 = plainB8;
+        encB9 = plainB9;
     }
     // Instructions
     writeU32(buf, numInsn);
     for (let i = 0; i < numInsn; i++) {
-        const insn = func.instructions[i];
-        let [b8, b9] = encodeInstruction(insn);
-        if (insnKeys) {
-            b8 = ((b8 >>> 0) ^ insnKeys[i * 2]) >>> 0;
-            b9 = ((b9 >>> 0) ^ insnKeys[i * 2 + 1]) >>> 0;
-        }
-        writeU32(buf, b8);
-        writeU32(buf, b9);
+        writeU32(buf, encB8[i] >>> 0);
+        writeU32(buf, encB9[i] >>> 0);
     }
     // Constants
     const numConst = func.constants.length;
@@ -277,11 +373,21 @@ export function serializeFunction(func) {
     }
     // v0.8 多 VM：函数默认 VM 编号（0/1/2 真VM，3/4 假VM，向后兼容 undefined=0）。
     writeU8(buf, (func.vmId ?? 0) & 0xFF);
-    // v0.6 F4: instruction XOR seed presence
-    const hasSeed = func.insnSeed !== undefined;
-    writeU8(buf, hasSeed ? 1 : 0);
-    if (hasSeed)
+    // v0.6 F4 / v0.11 F6: instruction encryption seed + mode + IV
+    const hasSeedByte = func.insnSeed !== undefined;
+    writeU8(buf, hasSeedByte ? 1 : 0);
+    if (hasSeedByte) {
         writeU32(buf, (func.insnSeed >>> 0));
+        // v0.11 F6: 写入加密模式 (0=F4, 1=F6)。
+        const mode = (func.insnCryptMode ?? INSN_CRYPT_F4) & 0xFF;
+        writeU8(buf, mode);
+        if (mode === INSN_CRYPT_F6) {
+            // F6 模式必写 IV (b8, b9)。无 IV 视为格式错误（fallback 到 F4 由反序列化端处理）。
+            const iv = func.insnIv ?? { b8: 0, b9: 0 };
+            writeU32(buf, iv.b8 >>> 0);
+            writeU32(buf, iv.b9 >>> 0);
+        }
+    }
     // Convert byte array to binary string
     return Buffer.from(buf).toString("binary");
 }
@@ -376,6 +482,12 @@ export function deserializeFunction(data, offset = 0) {
             let b;
             [b, pos] = readU8(bytes, pos);
             constants.push({ type: "bool", value: b !== 0 });
+        }
+        else if (typeTag === 3) {
+            // v0.12 Feature #5: varint 编码的 32-bit 整数。
+            let d;
+            [d, pos] = readVarint(bytes, pos);
+            constants.push({ type: "number", value: d });
         }
         else {
             let d;
@@ -492,8 +604,10 @@ export function deserializeFunction(data, offset = 0) {
     // v0.8 多 VM：函数默认 VM 编号。
     let vmId;
     [vmId, pos] = readU8(bytes, pos);
-    // v0.6 F4: instruction XOR seed
+    // v0.6 F4 / v0.11 F6: instruction encryption seed + mode + IV
     let insnSeed = undefined;
+    let insnCryptMode = INSN_CRYPT_F4;
+    let insnIv = undefined;
     if (isV06 && pos + 1 <= bytes.length) {
         let hasSeed;
         [hasSeed, pos] = readU8(bytes, pos);
@@ -501,17 +615,47 @@ export function deserializeFunction(data, offset = 0) {
             let sd;
             [sd, pos] = readU32(bytes, pos);
             insnSeed = sd;
+            // v0.11 F6: 检测是否有 mode 字节。旧 v0.6 proto 此处已是 end-of-buffer
+            // → 默认 F4。新 v0.11 proto 此处是 0 (F4) 或 1 (F6)。
+            if (pos + 1 <= bytes.length) {
+                let mode;
+                [mode, pos] = readU8(bytes, pos);
+                insnCryptMode = mode;
+                if (mode === INSN_CRYPT_F6) {
+                    // F6 模式必读 IV (b8, b9)。
+                    if (pos + 8 <= bytes.length) {
+                        let ivB8, ivB9;
+                        [ivB8, pos] = readU32(bytes, pos);
+                        [ivB9, pos] = readU32(bytes, pos);
+                        insnIv = { b8: ivB8, b9: ivB9 };
+                    }
+                    else {
+                        // 数据不完整（被截断）→ 回退到 F4。
+                        insnCryptMode = INSN_CRYPT_F4;
+                    }
+                }
+            }
         }
     }
-    // If F4 seed present, re-decode instructions with XOR keys applied.
+    // 指令解密：根据 insnCryptMode 选择 F4 或 F6。
     if (insnSeed !== undefined) {
-        const rng = mulberry32(insnSeed >>> 0);
-        for (let i = 0; i < numInsns; i++) {
-            const k8 = Math.floor(rng() * 0x100000000) >>> 0;
-            const k9 = Math.floor(rng() * 0x100000000) >>> 0;
-            const b8 = ((encB8[i] >>> 0) ^ k8) >>> 0;
-            const b9 = ((encB9[i] >>> 0) ^ k9) >>> 0;
-            instructions[i] = decodeInstruction(b8, b9);
+        if (insnCryptMode === INSN_CRYPT_F6 && insnIv !== undefined) {
+            // F6: per-IP keystream + per-IP ROL + CBC chaining。
+            const encB8Arr = encB8;
+            const encB9Arr = encB9;
+            const { plainB8, plainB9 } = f6Decrypt(encB8Arr, encB9Arr, insnSeed, insnIv);
+            for (let i = 0; i < numInsns; i++) {
+                instructions[i] = decodeInstruction(plainB8[i], plainB9[i]);
+            }
+        }
+        else {
+            // F4: 单 mulberry32 流 XOR（v0.6 legacy）。
+            const { k8, k9 } = f4Keystream(insnSeed, numInsns);
+            for (let i = 0; i < numInsns; i++) {
+                const b8 = ((encB8[i] >>> 0) ^ k8[i]) >>> 0;
+                const b9 = ((encB9[i] >>> 0) ^ k9[i]) >>> 0;
+                instructions[i] = decodeInstruction(b8, b9);
+            }
         }
     }
     return [{
@@ -524,6 +668,8 @@ export function deserializeFunction(data, offset = 0) {
             vmId,
             blindDescs,
             insnSeed,
+            insnCryptMode,
+            insnIv,
         }, pos - offset];
 }
 // ---- Instruction decoding (for tests / decrypt) ----

@@ -19,6 +19,8 @@ program
   .option("--no-deadcode", "disable dead code injection")
   .option("--vm", "VM bytecode mode: AST → bytecode → LZW+XOR → hex (experimental)")
   .option("--runtime", "wrap VM bytecode in Luau runtime template (implies --vm, v0.4)")
+  .option("--selective-vm", "v0.12 selective virtualization: only --@vm-annotated (or auto-identified) functions are VM-compiled; rest go through D1-D5")
+  .option("--no-vm-auto-identify", "disable v0.12 auto-identification of key-logic functions for selective VM")
   .option("--no-memwipe", "disable runtime memory wiping (secure_nil + GC, v0.5)")
   .option("--no-antidump", "disable anti-dump decoy blob (v0.5)")
   .option("--no-frag", "disable hex blob fragmentation (v0.7)")
@@ -27,7 +29,8 @@ program
   .option("--no-rt-deps", "disable v0.10 runtime-dependency layer (rt_mix + keyfuse runtime nibbles)")
   .option("--no-recursive-flatten", "disable RECURSIVE control-flow flattening (D4 only at top-level, v0.6 F1)")
   .option("--no-recursive-deadcode", "disable recursive dead-code + opaque predicates (D5 only at top-level, v0.6 F2)")
-  .option("--no-insn-crypt", "disable v0.11 F6 instruction-layer encryption (per-IP keystream + ROL + CBC + IV)");
+  .option("--no-insn-crypt", "disable v0.11 F6 instruction-layer encryption (per-IP keystream + ROL + CBC + IV)")
+  .option("--deadcode-ratio <number>", "D5 dead code injection ratio (0..1, default 0.2 lightweight)", "0.2");
 
 program.action((opts) => {
   const src = readFileSync(resolve(opts.input), "utf8");
@@ -42,6 +45,8 @@ program.action((opts) => {
     noDeadcode: opts.deadcode === false,
     vm: opts.vm === true || opts.runtime === true,
     runtime: opts.runtime === true,
+    selectiveVm: opts.selectiveVm === true,
+    vmAutoIdentify: opts.vmAutoIdentify !== false,
     noMemwipe: opts.memwipe === false,
     noAntidump: opts.antidump === false,
     noFrag: opts.frag === false,
@@ -51,6 +56,7 @@ program.action((opts) => {
     recursiveFlatten: opts.recursiveFlatten !== false,
     recursiveDeadcode: opts.recursiveDeadcode !== false,
     noInsnCrypt: opts.insnCrypt === false,
+    deadcodeRatio: Number(opts.deadcodeRatio),
   });
   if (opts.out) {
     writeFileSync(resolve(opts.out), out, "utf8");

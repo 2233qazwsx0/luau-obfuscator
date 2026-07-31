@@ -76,6 +76,11 @@ export interface FuncPrototype {
     vmId?: number;
     blindDescs?: (BlindDesc | null)[];
     insnSeed?: number;
+    insnCryptMode?: number;
+    insnIv?: {
+        b8: number;
+        b9: number;
+    };
 }
 export type BlindDesc = {
     kind: "num_split";

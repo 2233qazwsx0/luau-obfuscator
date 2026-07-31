@@ -57,6 +57,35 @@ describe("injectDeadcode", () => {
     expect(injected).toBeLessThanOrEqual(Math.floor(original * 0.5));
   });
 
+  it("v0.12 Feature #7: default ratio is 0.2 (lightweight mode)", () => {
+    // 20 statements → default 0.2 → max 4 dead code blocks
+    const src = Array.from({ length: 20 }, (_, i) => `print("s${i}")`).join("\n");
+    const ast = injectDeadcode(parseSrc(src), 42);
+    if (ast.t !== "Block") return;
+    const original = 20;
+    const injected = ast.body.length - original;
+    expect(injected).toBeLessThanOrEqual(Math.floor(original * 0.2));
+  });
+
+  it("v0.12 Feature #7: ratio=0.5 restores v0.6 behavior", () => {
+    const src = Array.from({ length: 20 }, (_, i) => `print("s${i}")`).join("\n");
+    const ast = injectDeadcode(parseSrc(src), 42, 0.5);
+    if (ast.t !== "Block") return;
+    const original = 20;
+    const injected = ast.body.length - original;
+    expect(injected).toBeLessThanOrEqual(Math.floor(original * 0.5));
+  });
+
+  it("v0.12 Feature #7: prefers unreachable branches over dead variables", () => {
+    // With bias=0.8, most injected blocks should be `if false then`.
+    // 50 stmts × 0.2 ratio = up to 10 dead blocks; with 80% bias, expect
+    // at least 4 unreachable branches (probabilistic margin).
+    const src = Array.from({ length: 50 }, (_, i) => `print("s${i}")`).join("\n");
+    const out = emitNode(injectDeadcode(parseSrc(src), 42));
+    const unreachableCount = (out.match(/if false then/g) || []).length;
+    expect(unreachableCount).toBeGreaterThanOrEqual(3);
+  });
+
   it("uses __d prefix for dead variable names", () => {
     const src = Array.from({ length: 20 }, (_, i) => `print("s${i}")`).join("\n");
     const out = emitNode(injectDeadcode(parseSrc(src), 42));

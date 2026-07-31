@@ -4,10 +4,42 @@
 // pipeline (number-key on `Number` nodes, replacement blob + per-string key
 // on `String`). We honor those during emission so the obfuscated form comes
 // out correctly.
+//
+// v0.12 Feature #8: 字符串解密器全局复用。之前每条加密字符串内联一份完整
+// IIFE（含 LCG 状态、循环、string.char 拼接），代码体积膨胀且每条字符串
+// 重复定义闭包。现在改为：在输出顶部定义一次 `_S(K, H)` 解密函数，每条
+// 字符串只发射 `_S({key}, "hex")` 调用。解密逻辑与原 IIFE 完全一致
+// （6 字节 key + LCG 滚动因子），只是定义复用。
 import { BIT32_POLYFILL } from "./bit32_polyfill.js";
+/**
+ * v0.12 Feature #8: 全局共享的字符串解密器。
+ * 与 transforms/strings.ts encryptString 完全对齐：
+ *   R_0 = K[1] XOR K[6]
+ *   cipher[i] = (plain[i] ^ ((K[(i%6)+1] + i) & 0xff) ^ (R & 0xff)) & 0xff
+ *   R_{n+1} = (R * 1664525 + 1013904223) % 2^32
+ * 参数：K = 6 字节密钥数组（1-indexed Lua），H = hex 字符串。
+ * 依赖：_B（bit32 polyfill，已在 BIT32_POLYFILL 中定义）。
+ */
+const STRING_DECRYPTOR_HELPER = [
+    "local function _S(K,H)",
+    "  local O=\"\"",
+    "  local R=_B(K[1],K[6])",
+    "  for i=1,#H,2 do",
+    "    local j=(i+1)/2-1",
+    "    O=O..string.char((_B(_B(tonumber(H:sub(i,i+1),16),((K[(j%6)+1]+j)%256)),(R%256)))%256)",
+    "    R=(R*1664525+1013904223)%4294967296",
+    "  end",
+    "  return O",
+    "end",
+].join("\n");
 export function emit(program) {
-    const ctx = { indent: 0, out: [BIT32_POLYFILL] };
+    const ctx = { indent: 0, out: [BIT32_POLYFILL], needsStringHelper: false };
     emitNode(ctx, program);
+    // v0.12 Feature #8: 若有加密字符串，在 BIT32_POLYFILL 之后插入共享解密器。
+    // _S 依赖 _B，必须放在 _B 定义之后；放在所有用户代码之前避免被局部覆盖。
+    if (ctx.needsStringHelper) {
+        ctx.out.splice(1, 0, STRING_DECRYPTOR_HELPER);
+    }
     return ctx.out.join("\n");
 }
 function nl(ctx, n = 1) { ctx.out.push(""); void n; }
@@ -169,9 +201,11 @@ function exprToLuau(ctx, e) {
             const key = e.__str_key;
             if (blob && key) {
                 const keyLit = `{${key.join(",")}}`;
-                // v0.10: 6-byte key + LCG rolling factor. R seeded from K[1]^K[6];
-                // each byte: hex ^ ((K[(j%6)+1]+j)%256) ^ (R%256); R = LCG step.
-                return `((function(K) return function(H) local O="" local R=_B(K[1],K[6]) for i=1,#H,2 do local j=(i+1)/2-1 O=O..string.char((_B(_B(tonumber(H:sub(i,i+1),16),((K[(j%6)+1]+j)%256)),(R%256)))%256) R=(R*1664525+1013904223)%4294967296 end;return O end end)(${keyLit}))("${blob}")`;
+                // v0.12 Feature #8: 调用全局共享解密器 _S（定义在输出顶部），
+                // 替代每条字符串内联一份完整 IIFE。解密逻辑完全一致，仅定义复用。
+                // 原 IIFE 约 280 字符/条；新形式约 18 字符/条 + 一次 helper 定义。
+                ctx.needsStringHelper = true;
+                return `_S(${keyLit},"${blob}")`;
             }
             return JSON.stringify(e.value);
         }
@@ -199,8 +233,11 @@ function exprToLuau(ctx, e) {
                 return tp ? `${p}: ${tp}` : p;
             }).join(", ");
             const retStr = e.retType ? `: ${e.retType}` : "";
-            const bodyCtx = { indent: ctx.indent + 1, out: [] };
+            const bodyCtx = { indent: ctx.indent + 1, out: [], needsStringHelper: false };
             emitNode(bodyCtx, e.body);
+            // v0.12 Feature #8: 子函数体内若引用了加密字符串，标记外层 ctx 也需要 helper。
+            if (bodyCtx.needsStringHelper)
+                ctx.needsStringHelper = true;
             const bodyStr = bodyCtx.out.join("\n");
             const indentedBody = bodyStr.split("\n").map(l => l.length > 0 ? "    ".repeat(bodyCtx.indent > 0 ? bodyCtx.indent : ctx.indent + 1) + l : l).join("\n");
             return `function(${params})${retStr}\n${indentedBody}\n${ind(ctx)}end`;

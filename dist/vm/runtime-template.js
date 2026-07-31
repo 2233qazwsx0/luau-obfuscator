@@ -14,6 +14,9 @@
 // 用一串顶层赋值语句按真实顺序拼接。D4 平坦化把每条拼接语句散入独立 dispatch
 // case；D5 注入死代码碎片；D2 混淆拼接索引；D3 加密碎片内容。
 //
+// v0.8 性能修复：bi 层 LZW 解压已移除（runtime 模板不再调用 lzw_decode）。
+// 解密链简化为 hex → bytes → (rt_mix_decrypt?) → (xor_bytes_512?) → stream_decrypt。
+//
 // 记住我们面向的是 luau，加密后的也是 luau。
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";

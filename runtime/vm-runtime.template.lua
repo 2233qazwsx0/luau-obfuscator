@@ -246,11 +246,30 @@ local function make_reader(data)
     state.pos = state.pos + len
     return s
   end
+  -- v0.12 Feature #5: zigzag + LEB128 变长整数读取（与 src/vm/encoder.ts writeVarint 对齐）。
+  --   |n| <= 63 → 1 字节；|n| <= 8191 → 2 字节 ... 最多 5 字节覆盖 32-bit signed。
+  --   防御：最多读 5 字节，超出按当前累积值返回。
+  local function varint()
+    local v, shift, b = 0, 0, 0
+    for _ = 1, 5 do
+      b = u8() or 0
+      v = v + ((b % 128) * (2 ^ shift))
+      if b < 128 then break end
+      shift = shift + 7
+    end
+    -- zigzag 逆变换：(v >>> 1) ^ -(v & 1)
+    -- v 是无符号累积值，Lua number 是 double，2^32 内精确。
+    local lo = v % 2
+    local n = math.floor(v / 2)
+    if lo == 1 then n = -n - 1 end
+    return n
+  end
   return {
     u8 = u8,
     u32 = u32,
     f64 = f64,
     str = str,
+    varint = varint,
     pos = function() return state.pos end,
     seek = function(p) state.pos = p end,
     sub = function(off, len) return string.sub(data, off, off + len - 1) end,
@@ -430,6 +449,9 @@ local function deserialize_proto(reader)
       raw_constants[i] = reader.str()
     elseif tag == 1 then
       raw_constants[i] = reader.u8() ~= 0
+    elseif tag == 3 then
+      -- v0.12 Feature #5: varint 编码的 32-bit 整数。
+      raw_constants[i] = reader.varint()
     else
       raw_constants[i] = reader.f64()
     end
@@ -546,6 +568,17 @@ local function deserialize_proto(reader)
     end
   end
 
+  -- v0.12 Feature #4: 寄存器窗口化。读 has_reg_count + reg_count 字节。
+  -- 旧 proto（v0.11 及以前）此处已是 end-of-buffer → nil，运行时回退到 256。
+  local reg_count = nil
+  if is_v06 then
+    local has_rc = reader.u8()
+    if has_rc and has_rc ~= 0 then
+      local rc = reader.u8()
+      if rc then reg_count = rc end
+    end
+  end
+
   return {
     instructions = instructions,
     constants = constants,
@@ -556,6 +589,7 @@ local function deserialize_proto(reader)
     is_vararg = is_vararg,
     upvalues = upvalues,
     vm_id = vm_id,
+    reg_count = reg_count,
   }
 end
 
@@ -769,7 +803,11 @@ local function make_closure(sub, env, regs, upvals, destReg)
 end
 
 function vm_execute(proto, env, upvals, args)
+  -- v0.12 Feature #4: 寄存器窗口化。按 proto.reg_count 预分配 regs 表，
+  -- 避免 Luau 在执行中反复 rehash。旧 proto 无 reg_count → 回退 256。
+  local reg_count = proto.reg_count or 256
   local regs = {}
+  for i = 0, reg_count - 1 do regs[i] = nil end
   local ip = 1
   local code = proto.instructions
   -- F3: 常量访问器（首次访问盲化常量时解密并缓存）

@@ -1,3 +1,4 @@
+import { type InsncryptMode } from "./compiler.js";
 import { type RuntimeProtectOptions } from "./memory.js";
 import type { Node } from "../parser/parser.js";
 export interface VmResult {
@@ -14,11 +15,12 @@ export declare function deriveCipherKey(seed: number): number;
 /**
  * Compile an AST to packed bytecode.
  *
- * @param ast - The parsed AST (Block node) from parser.parse()
+ * @param ast  - The parsed AST (Block node) from parser.parse()
  * @param seed - PRNG seed for deterministic compilation + encryption
+ * @param insnCrypt - v0.11 F6 指令层加密模式（"f6" 默认 / "f4" legacy / "off"）
  * @returns Packed hex string + cipher key, ready for embedding
  */
-export declare function compileVM(ast: Node, seed: number): VmResult;
+export declare function compileVM(ast: Node, seed: number, insnCrypt?: InsncryptMode): VmResult;
 /**
  * Compile an AST to packed bytecode AND wrap it in the Luau runtime template.
  * The returned string is a complete, executable Luau script.
@@ -35,4 +37,4 @@ export declare function compileVM(ast: Node, seed: number): VmResult;
  * @param opts - 运行时保护选项（内存清理 / 反 dump / 碎片化 / keyfuse / rt_deps，默认全开）
  * @returns Final Luau source that decodes and executes the bytecode
  */
-export declare function compileVMWithRuntime(ast: Node, seed: number, opts?: RuntimeProtectOptions): string;
+export declare function compileVMWithRuntime(ast: Node, seed: number, opts?: RuntimeProtectOptions, insnCrypt?: InsncryptMode): string;

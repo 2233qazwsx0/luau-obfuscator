@@ -53,4 +53,30 @@ describe("obfuscate", () => {
     const out = runPipeline(src, { seed: 1 }).out;
     expect(out.length).toBeGreaterThan(0);
   });
+
+  it("v0.12 Feature #8: emits a single shared _S decryptor instead of per-string IIFEs", () => {
+    // 多条加密字符串应共享一个 _S 定义，而不是每条内联一份 function(K) IIFE。
+    const src = `local a="hello world one"\nlocal b="hello world two"\nlocal c="hello world three"\nprint(a,b,c)`;
+    const out = runPipeline(src, { seed: 7, noFlatten: true, noDeadcode: true }).out;
+    // 共享解密器只定义一次
+    const sDefCount = (out.match(/local function _S\(K,H\)/g) || []).length;
+    expect(sDefCount).toBe(1);
+    // 不应再出现旧的内联 IIFE 头部
+    expect(out).not.toContain("(function(K) return function(H)");
+    // 三条字符串都应通过 _S( 调用解密
+    const sCallCount = (out.match(/_S\(/g) || []).length;
+    expect(sCallCount).toBeGreaterThanOrEqual(3);
+  });
+
+  it("v0.12 Feature #8: no encrypted strings → no _S helper emitted", () => {
+    const src = `print("x")`; // 太短，不会被加密
+    const out = runPipeline(src, { seed: 7, noNumbers: true, noFlatten: true, noDeadcode: true }).out;
+    expect(out).not.toContain("local function _S");
+  });
+
+  it("v0.12 Feature #7: deadcodeRatio=0 disables D5 injection effectively", () => {
+    const src = Array.from({ length: 20 }, (_, i) => `print("s${i}")`).join("\n");
+    const out = runPipeline(src, { seed: 42, deadcodeRatio: 0, noFlatten: true }).out;
+    expect(out).not.toContain("__d");
+  });
 });

@@ -114,7 +114,9 @@ describe("flatten pipeline", () => {
   it("D2/D3 after flatten", () => {
     const src = 'local msg = \"hello world from flattener\"\nprint(msg)';
     const r = runPipeline(src, { seed: 42 });
-    expect(r.out).not.toContain("hello world from flattener"); expect(r.out).toContain("function(K)");
+    // v0.12 Feature #8: 字符串解密器改为全局共享 `_S(K,H)`，不再每条内联
+    // `function(K)` IIFE。检测加密生效的标志改为 `_S(` 调用。
+    expect(r.out).not.toContain("hello world from flattener"); expect(r.out).toContain("_S(");
   });
   it("hello.lua style", () => {
     const src = 'local greeting = \"hello world\"\nlocal repeat_count = 3\nfor i = 1, repeat_count do\n  print(greeting .. \" #\" .. tostring(i))\nend\nlocal function add(a, b)\n  return a + b\nend\nprint(\"1 + 2 = \" .. tostring(add(1, 2)))\nif greeting:sub(1, 1) == \"h\" then\n  print(\"starts with h\")\nend';

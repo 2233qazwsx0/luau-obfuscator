@@ -16,8 +16,22 @@ import { mulberry32, randInt } from "../util/prng.js";
 /** Probability range of injecting dead code between two real statements. */
 const INJECT_PROB_MIN = 0.30;
 const INJECT_PROB_MAX = 0.50;
-/** Maximum dead code blocks = 50% of original statement count. */
-const MAX_RATIO = 0.5;
+/**
+ * Maximum dead code blocks as a fraction of original statement count.
+ *
+ * v0.12 轻量模式（Feature #7）：上限从 0.5 降到 0.2。降低 D5 注入量可减少
+ * D4 平坦化后真正会执行的 dispatch case 数量，从而降低 VM 解释器在
+ * Roblox 移动端上的 dispatch 开销。可通过 injectDeadcodeRecursive 的
+ * ratio 参数或 ObfuscateOptions.deadcodeRatio 覆盖。
+ */
+const DEFAULT_MAX_RATIO = 0.2;
+/**
+ * v0.12 Feature #7：偏向不可达分支（`if false then ... end`）而非可执行
+ * 死变量（`local __dX = ...`）。不可达分支在 D4 平坦化后变成永不执行的
+ * dispatch case，不会增加运行时开销；可执行死变量会变成真实 dispatch
+ * case，每条都跑一次赋值/算术。0.8 = 80% 不可达分支 + 20% 死变量。
+ */
+const UNREACHABLE_BRANCH_BIAS = 0.8;
 /** Variable name prefix for dead code locals. */
 const PREFIX = "__d";
 /** Seed offset for D5 RNG, ensures independence from other passes. */
@@ -52,16 +66,21 @@ function isTerminalStatement(stmt) {
  * Main entry (v0.5): inject dead code into the top-level Block of `ast`.
  * Also applies opaque predicate wrapping to statements in the top-level block.
  * Returns the original AST unchanged if it's not a Block or has too few statements.
+ *
+ * v0.12 Feature #7：`ratio` 控制 D5 注入上限（占原始语句数的比例）。
+ * 默认 0.2（轻量模式）。传 0.5 可恢复 v0.6 行为。
  */
-export function injectDeadcode(ast, seed) {
-    return injectDeadcodeRecursive(ast, seed, false);
+export function injectDeadcode(ast, seed, ratio = DEFAULT_MAX_RATIO) {
+    return injectDeadcodeRecursive(ast, seed, false, ratio);
 }
 /**
  * v0.6 entry: applies D5 dead code + opaque predicates to the top-level Block
  * AND to every Function body Block recursively. Mirrors the recursive-
  * flatten coverage so inner functions get equivalent predicate hardening.
+ *
+ * v0.12 Feature #7：新增 `ratio` 参数（默认 0.2），控制 D5 注入量上限。
  */
-export function injectDeadcodeRecursive(ast, seed, _recursive = true) {
+export function injectDeadcodeRecursive(ast, seed, _recursive = true, ratio = DEFAULT_MAX_RATIO) {
     // v0.6 NOTE: FULL recursion (into nested function bodies) is TEMPORARILY
     // disabled because wrapping early-Return / inner-If structures inside
     // opaque predicates can produce duplicate statements or unbalanced `if/end`.
@@ -91,8 +110,12 @@ export function injectDeadcodeRecursive(ast, seed, _recursive = true) {
     const opSeed = (seed ^ OP_SEED_OFFSET) >>> 0;
     const opWrapped = wrapBlockWithOpaque(body, opSeed);
     // --- Phase 2: inject dead code blocks between statements ---
+    // v0.12 Feature #7：使用传入的 ratio（默认 0.2）而非硬编码 0.5。
+    // ratio=0 → maxInject=0 → 不注入（等价于 noDeadcode）；ratio∈(0,1] → 按比例；
+    // 非法值（负数 / >1 / NaN）→ 回落默认 0.2。
     const rng = mulberry32((seed ^ SEED_OFFSET) >>> 0);
-    const maxInject = Math.floor(opWrapped.length * MAX_RATIO);
+    const safeRatio = (typeof ratio === "number" && ratio >= 0 && ratio <= 1) ? ratio : DEFAULT_MAX_RATIO;
+    const maxInject = Math.floor(opWrapped.length * safeRatio);
     let injected = 0;
     const injectProb = INJECT_PROB_MIN + rng() * (INJECT_PROB_MAX - INJECT_PROB_MIN);
     let varCounter = 0;
@@ -111,7 +134,8 @@ export function injectDeadcodeRecursive(ast, seed, _recursive = true) {
             }
             // Recurse into this statement's INNER-block children (If branches, loops,
             // Do blocks, etc.). Skips Function.body nodes — see note above.
-            newBody.push(recurseIntoStmtChildren(opWrapped[i], seed));
+            // v0.12 Feature #7：传播 ratio 到递归调用。
+            newBody.push(recurseIntoStmtChildren(opWrapped[i], seed, safeRatio));
             if (isTerminalStatement(opWrapped[i])) {
                 reachedTerminal = true;
             }
@@ -290,11 +314,13 @@ function generateJunkFor(stmt, rng, vcStart) {
  * nested Blocks (via Function / If / While / etc.). This ensures inner
  * function bodies and scoped blocks get predicate + deadcode treatment too.
  *
+ * v0.12 Feature #7：传播 ratio 到递归调用。
+ *
  * Returns the (possibly mutated) statement.
  */
-function recurseIntoStmtChildren(stmt, seed) {
+function recurseIntoStmtChildren(stmt, seed, ratio) {
     const nextSeed = (seed ^ 0xABCD01) >>> 0;
-    const rec = (n) => injectDeadcodeRecursive(n, nextSeed, true);
+    const rec = (n) => injectDeadcodeRecursive(n, nextSeed, true, ratio);
     switch (stmt.t) {
         case "If":
             stmt.branches = stmt.branches.map((b) => ({
@@ -331,9 +357,14 @@ function recurseIntoStmtChildren(stmt, seed) {
  * Generate one dead code block: either an unreachable `if false` branch
  * or a dead variable statement. Returns the AST node and the number of
  * unique variable names consumed.
+ *
+ * v0.12 Feature #7：偏向不可达分支（UNREACHABLE_BRANCH_BIAS=0.8）。不可达
+ * 分支在 D4 平坦化后变成永不执行的 dispatch case，零运行时开销；可执行
+ * 死变量会变成真实 dispatch case，每条都跑一次赋值/算术，在 VM 解释器里
+ * 放大 dispatch 循环开销。轻量模式下优先不可达分支。
  */
 function generateDeadBlock(rng, varCounter) {
-    const useBranch = rng() < 0.5;
+    const useBranch = rng() < UNREACHABLE_BRANCH_BIAS;
     if (useBranch) {
         return generateUnreachableBranch(rng, varCounter);
     }

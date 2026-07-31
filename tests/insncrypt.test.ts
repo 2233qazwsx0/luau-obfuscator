@@ -35,6 +35,7 @@ import {
   encodeInstruction,
   decodeInstruction,
 } from "../src/vm/encoder.js";
+import type { ConstEntry } from "../src/vm/opcodes.js";
 import { compileAST } from "../src/vm/compiler.js";
 import { lex } from "../src/parser/lexer.js";
 import { parse } from "../src/parser/parser.js";
@@ -1002,5 +1003,111 @@ describe("insncrypt: F6/F4 跨模式不可解密", () => {
     // 结果不应等于明文（F6 密文用 F4 解必错）
     expect(wrongB8).not.toEqual(plainB8);
     expect(wrongB9).not.toEqual(plainB9);
+  });
+});
+
+// ---- 17. v0.12 Feature #5: 常量池压缩（varint 编码整数）----
+
+describe("encoder: v0.12 Feature #5 varint 常量压缩", () => {
+  function makeProtoWithConstants(constants: ConstEntry[]) {
+    return {
+      instructions: [
+        { op: 1, A: 0, B: 0, C: 0, D: 0, mode: 0 as const },
+      ],
+      constants,
+      subFunctions: [],
+      paramCount: 0,
+      isVararg: false,
+      upvalues: [],
+      vmId: 0,
+      insnSeed: undefined,
+      blindDescs: constants.map(() => null),
+    };
+  }
+
+  it("整数常量用 tag 3 (varint) 编码，小整数占 1 字节", () => {
+    const proto = makeProtoWithConstants([
+      { type: "number", value: 0 },   // zigzag 0 → 1 字节
+      { type: "number", value: 1 },   // zigzag 2 → 1 字节
+      { type: "number", value: -1 },  // zigzag 1 → 1 字节
+      { type: "number", value: 63 },  // zigzag 126 → 1 字节
+    ]);
+    const serialized = serializeFunction(proto);
+    const bytes = Array.from(Buffer.from(serialized, "binary"));
+    // 定位到常量区：numInsn(u32=1) + 1 条指令(8 字节) + numConst(u32=4)
+    // = 4 + 8 + 4 = 16 字节后是第一个常量的 tag。
+    const tag0 = bytes[16]!;
+    expect(tag0).toBe(3); // varint tag
+    // 每个 varint 整数 = 1 tag + 1 data 字节 = 2 字节
+    for (let i = 0; i < 4; i++) {
+      expect(bytes[16 + i * 2]).toBe(3);
+      expect(bytes[16 + i * 2 + 1]).toBeLessThan(128); // 单字节 varint
+    }
+  });
+
+  it("浮点常量仍用 tag 2 (f64) 编码", () => {
+    const proto = makeProtoWithConstants([
+      { type: "number", value: 42.5 },
+    ]);
+    const serialized = serializeFunction(proto);
+    const bytes = Array.from(Buffer.from(serialized, "binary"));
+    expect(bytes[16]).toBe(2); // f64 tag
+  });
+
+  it("大整数 (>32-bit) 回退到 tag 2 (f64)", () => {
+    const proto = makeProtoWithConstants([
+      { type: "number", value: 2147483648 }, // 2^31，超出 32-bit signed
+    ]);
+    const serialized = serializeFunction(proto);
+    const bytes = Array.from(Buffer.from(serialized, "binary"));
+    expect(bytes[16]).toBe(2); // 回退 f64
+  });
+
+  it("varint 整数常量 serialize → deserialize 往返正确", () => {
+    const samples = [0, 1, -1, 63, -64, 8191, -8192, 100000, -100000, 2147483647, -2147483648];
+    const proto = makeProtoWithConstants(samples.map((v) => ({ type: "number" as const, value: v })));
+    const [dec] = deserializeFunction(serializeFunction(proto), 0);
+    expect(dec.constants.length).toBe(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      expect(dec.constants[i]!.type).toBe("number");
+      expect((dec.constants[i]! as { value: number }).value).toBe(samples[i]);
+    }
+  });
+
+  it("num_split 盲化的数字常量仍用 tag 2 (f64)", () => {
+    const proto = {
+      instructions: [{ op: 1, A: 0, B: 0, C: 0, D: 0, mode: 0 as const }],
+      constants: [{ type: "number" as const, value: 42 }],
+      subFunctions: [],
+      paramCount: 0,
+      isVararg: false,
+      upvalues: [],
+      vmId: 0,
+      insnSeed: undefined,
+      blindDescs: [{ kind: "num_split" as const, k2: 0.5 }],
+    };
+    const serialized = serializeFunction(proto);
+    const bytes = Array.from(Buffer.from(serialized, "binary"));
+    expect(bytes[16]).toBe(2); // 盲化路径走 f64
+  });
+
+  it("varint 编码确实比 f64 更小（小整数场景）", () => {
+    const intProto = makeProtoWithConstants([
+      { type: "number", value: 1 },
+      { type: "number", value: 2 },
+      { type: "number", value: 3 },
+    ]);
+    const floatProto = makeProtoWithConstants([
+      { type: "number", value: 1.5 },
+      { type: "number", value: 2.5 },
+      { type: "number", value: 3.5 },
+    ]);
+    const intLen = serializeFunction(intProto).length;
+    const floatLen = serializeFunction(floatProto).length;
+    // 3 个小整数：3 * (1 tag + 1 varint) = 6 字节
+    // 3 个 f64：3 * (1 tag + 8 f64) = 27 字节
+    // 差距 21 字节，intLen 应明显小于 floatLen。
+    expect(intLen).toBeLessThan(floatLen);
+    expect(floatLen - intLen).toBeGreaterThanOrEqual(18);
   });
 });

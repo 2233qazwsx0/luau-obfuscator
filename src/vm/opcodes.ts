@@ -264,6 +264,10 @@ export interface FuncPrototype {
   // enc_i = ROL((plain_i ^ key_i) ^ enc_{i-1}, rot_i)，enc_{-1} = (ivB8, ivB9)。
   // 篡改任一字节会破坏本条 + 下一条的解密（tamper propagation）。
   insnIv?: { b8: number; b9: number };
+  // v0.12 Feature #4: 寄存器窗口化。编译器分析函数实际使用的最高寄存器
+  // 槽位（含参数 + 局部 + 临时），运行时按需 pre-size regs 表，避免 256 槽
+  // 浪费。undefined = 旧 proto，运行时回退到 256（向后兼容）。
+  regCount?: number;
 }
 
 // ---- v0.6 F3: constant blinding descriptors ----

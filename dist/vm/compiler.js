@@ -20,10 +20,11 @@
 import { Op, buildSemToOpMap, OP_SWITCH_VM, OP_DEAD_VM, VM_COUNT, REAL_VM_IDS, DEAD_VM_IDS, } from "./opcodes.js";
 import { ConstantPool } from "./constants.js";
 import { mulberry32 } from "../util/prng.js";
+import { INSN_CRYPT_F4, INSN_CRYPT_F6, genInsnIv, } from "./insncrypt.js";
 // ---- Main compiler entry point ----
-export function compileAST(ast, seed) {
+export function compileAST(ast, seed, opts = {}) {
     const rng = mulberry32((seed ^ 0xC0FFEE) >>> 0);
-    const compiler = new Compiler(rng, seed);
+    const compiler = new Compiler(rng, seed, opts);
     return compiler.compileChunk(ast);
 }
 // ---- Compiler class ----
@@ -41,11 +42,14 @@ class Compiler {
     // v0.6 F3 阈值
     BLIND_STR_MIN = 8;
     BLIND_NUM_MIN = 8;
-    constructor(rng, seed) {
+    // v0.11 F6: 指令层加密模式（"f6" / "f4" / "off"）。
+    insnCrypt;
+    constructor(rng, seed, opts = {}) {
         this.rng = rng;
         this.seed = seed >>> 0;
         this.semToOpMaps = [];
         this.protoCounter = 0;
+        this.insnCrypt = opts.insnCrypt ?? "f6";
         for (let vm = 0; vm < VM_COUNT; vm++) {
             this.semToOpMaps.push(buildSemToOpMap(seed, vm, rng));
         }
@@ -271,9 +275,23 @@ class Compiler {
         func.proto.constants = func.pool.getAll();
         func.proto.subFunctions = func.subFuncs;
         func.proto.upvalues = func.scope.upvalues;
-        // v0.6 F4: 每个 proto 独立的指令 XOR seed
-        this.protoCounter = (this.protoCounter + 1) >>> 0;
-        func.proto.insnSeed = (this.seed ^ (this.protoCounter * 0x9E3779B1)) >>> 0;
+        // v0.6 F4 / v0.11 F6: 每个 proto 独立的指令加密 seed。
+        // insnCrypt 决定模式：f6 (默认) → mode=1 + IV；f4 → mode=0；off → 不设 seed。
+        if (this.insnCrypt !== "off") {
+            this.protoCounter = (this.protoCounter + 1) >>> 0;
+            func.proto.insnSeed = (this.seed ^ (this.protoCounter * 0x9E3779B1)) >>> 0;
+            if (this.insnCrypt === "f6") {
+                func.proto.insnCryptMode = INSN_CRYPT_F6;
+                // IV 由 PRNG 派生，确保确定性。复用 seed + protoCounter 墒源。
+                const ivRng = mulberry32((this.seed ^ (this.protoCounter * 0x85EBCA6B)) >>> 0);
+                func.proto.insnIv = genInsnIv(ivRng);
+            }
+            else {
+                // F4 legacy：不写 mode 字节也能向后兼容（反序列化默认 mode=0=F4），
+                // 但显式写 0 让 v0.11+ 反序列化端无需 end-of-buffer 探测。
+                func.proto.insnCryptMode = INSN_CRYPT_F4;
+            }
+        }
         // v0.6 F3: 对敏感常量加盲
         const nConst = func.proto.constants.length;
         if (nConst > 0) {

@@ -1,11 +1,15 @@
 // src/vm/pipeline.ts — VM bytecode compilation pipeline entry.
 //
 // Takes a parsed AST and a PRNG seed, compiles to FuncPrototype,
-// serializes to binary, packs with LZW+XOR, returns a hex string
-// suitable for embedding in a Luau runtime template.
+// serializes to binary, packs with stream-cipher (+ optional keyfuse XOR +
+// rt_mix), returns a hex string suitable for embedding in a Luau runtime
+// template.
+//
+// v0.8 性能修复：移除 LZW 压缩层（bi 层去重）。pipeline 不再调用 lzwCompress，
+// packer.packBytecode / packBytecodeKeyfused 内部仅做 stream cipher (+ xor512)。
 import { compileAST } from "./compiler.js";
 import { serializeFunction } from "./encoder.js";
-import { packBytecode, packBytecodeKeyfused, lzwCompress, streamEncrypt, bytesToHex } from "./packer.js";
+import { packBytecode, packBytecodeKeyfused, streamEncrypt, bytesToHex } from "./packer.js";
 import { buildRuntime } from "./runtime-template.js";
 import { DEFAULT_RUNTIME_PROTECT } from "./memory.js";
 import { deriveKeyfuseKey, xor512, computeKeyfuseKhSize } from "./keyfuse.js";
@@ -20,15 +24,18 @@ export function deriveCipherKey(seed) {
 /**
  * Compile an AST to packed bytecode.
  *
- * @param ast - The parsed AST (Block node) from parser.parse()
+ * @param ast  - The parsed AST (Block node) from parser.parse()
  * @param seed - PRNG seed for deterministic compilation + encryption
+ * @param insnCrypt - v0.11 F6 指令层加密模式（"f6" 默认 / "f4" legacy / "off"）
  * @returns Packed hex string + cipher key, ready for embedding
  */
-export function compileVM(ast, seed) {
+export function compileVM(ast, seed, insnCrypt = "f6") {
     const cipherKey = deriveCipherKey(seed);
-    const proto = compileAST(ast, seed);
+    const compilerOpts = { insnCrypt };
+    const proto = compileAST(ast, seed, compilerOpts);
     const serialized = serializeFunction(proto);
-    const hex = packBytecode(serialized, cipherKey, true);
+    // v0.8: LZW 移除，packBytecode 内部仅做 stream encrypt + hex。
+    const hex = packBytecode(serialized, cipherKey);
     return { hex, cipherKey };
 }
 /**
@@ -47,35 +54,35 @@ export function compileVM(ast, seed) {
  * @param opts - 运行时保护选项（内存清理 / 反 dump / 碎片化 / keyfuse / rt_deps，默认全开）
  * @returns Final Luau source that decodes and executes the bytecode
  */
-export function compileVMWithRuntime(ast, seed, opts = DEFAULT_RUNTIME_PROTECT) {
+export function compileVMWithRuntime(ast, seed, opts = DEFAULT_RUNTIME_PROTECT, insnCrypt = "f6") {
     const cipherKey = deriveCipherKey(seed);
-    const proto = compileAST(ast, seed);
+    const compilerOpts = { insnCrypt };
+    const proto = compileAST(ast, seed, compilerOpts);
     const serialized = serializeFunction(proto);
     const keyfuseOn = opts.keyfuse !== false;
     const rtDepsOn = keyfuseOn && opts.rtDeps !== false;
     if (!keyfuseOn) {
-        // 无 keyfuse：原始 LZW + stream + hex。
-        const hex = packBytecode(serialized, cipherKey, true);
+        // 无 keyfuse：v0.8 仅 stream + hex（LZW 已移除）。
+        const hex = packBytecode(serialized, cipherKey);
         return buildRuntime(hex, cipherKey, opts, seed, null);
     }
     // keyfuse 开启：派生 512 位密钥。
     const kfKey = deriveKeyfuseKey(seed);
     if (!rtDepsOn) {
-        // keyfuse 但无 rt_deps：LZW + stream + xor512 + hex（v0.9 行为）。
-        const hex = packBytecodeKeyfused(serialized, cipherKey, kfKey.keyBytes, true);
+        // keyfuse 但无 rt_deps：stream + xor512 + hex（v0.8 移除 LZW 后）。
+        const hex = packBytecodeKeyfused(serialized, cipherKey, kfKey.keyBytes);
         return buildRuntime(hex, cipherKey, opts, seed, kfKey.keyHex);
     }
     // v0.10 rt_deps：解密链追加 rt_mix 层 + KEY nibbles 126/127 运行时派生。
-    // 步骤分解（避免循环依赖：hexLen 不依赖 KEY 内容）：
-    //   1. LZW + stream → streamData（不依赖 keyBytes）
+    // v0.8 步骤分解（LZW 已移除，避免循环依赖：hexLen 不依赖 KEY 内容）：
+    //   1. stream → streamData（不依赖 keyBytes）
     //   2. hexLen = streamData.length * 2（xor512 / rt_mix 均保长）
     //   3. rtToken = deriveRtToken(hexLen, khSize)
     //   4. 覆盖 keyBytes[63] = rtToken 派生的 2 nibble
     //   5. xor512(streamData, keyBytes) → xorData
     //   6. rtMixEncrypt(xorData, rtToken) → rtData
     //   7. hex = bytesToHex(rtData)
-    const lzwData = lzwCompress(serialized);
-    const streamData = streamEncrypt(lzwData, cipherKey);
+    const streamData = streamEncrypt(serialized, cipherKey);
     const hexLen = streamData.length * 2;
     const rtToken = deriveRtToken(hexLen, computeKeyfuseKhSize());
     const [n126, n127] = rtTokenToNibbles(rtToken);

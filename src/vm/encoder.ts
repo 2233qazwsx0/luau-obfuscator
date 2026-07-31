@@ -164,6 +164,52 @@ function writeU8(buf: number[], value: number): void {
 }
 
 /**
+ * v0.12 Feature #5: 写入 zigzag + LEB128 变长整数。
+ *   zigzag: 0→0, -1→1, 1→2, -2→3, 2→4 ... 让小负数也只占 1 字节。
+ *   LEB128: 每 7 bit 一字节，MSB=1 表示后续还有字节。
+ *   |n| <= 63 → 1 字节；|n| <= 8191 → 2 字节；|n| <= 2^20 → 3 字节 ...
+ *   支持范围：[-2^31, 2^31-1]（32-bit signed）。超出范围返回 false 不写入。
+ *   与 runtime/vm-runtime.template.lua 的 read_varint 完全对齐。
+ *   返回 true 表示成功写入；false 表示值超出 varint 范围（调用方应回退 f64）。
+ */
+function writeVarint(buf: number[], value: number): boolean {
+  if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+    return false;
+  }
+  // zigzag: (n << 1) ^ (n >> 31)，对 32-bit 范围安全。
+  const zz = ((value << 1) ^ (value >> 31)) >>> 0;
+  let v = zz;
+  while (v >= 0x80) {
+    buf.push((v & 0x7F) | 0x80);
+    v = v >>> 7;
+  }
+  buf.push(v & 0x7F);
+  return true;
+}
+
+/**
+ * v0.12 Feature #5: 读取 zigzag + LEB128 变长整数。
+ *   返回 [value, newOffset]。与 writeVarint 对称。
+ */
+function readVarint(bytes: number[], offset: number): [number, number] {
+  let v = 0;
+  let shift = 0;
+  let pos = offset;
+  while (true) {
+    const b = bytes[pos]!;
+    pos++;
+    v |= (b & 0x7F) << shift;
+    if ((b & 0x80) === 0) break;
+    shift += 7;
+    if (shift > 35) break; // 防御：最多 5 字节（35 bit > 32 bit + sign）
+  }
+  // zigzag 逆变换：(v >>> 1) ^ -(v & 1)
+  const zz = v >>> 0;
+  const n = (zz >>> 1) ^ -(zz & 1);
+  return [n, pos];
+}
+
+/**
  * Write an IEEE 754 double (8 bytes, little-endian) to the buffer.
  */
 function writeF64(buf: number[], value: number): void {
@@ -193,6 +239,13 @@ function writeString(buf: number[], value: string): void {
  * Serialize a constant entry to the bytecode buffer.
  * If `blind` is provided and applies to this entry, the stored value
  * is blinded (F3): numbers become (value + k2) = k1, strings become XOR bytes.
+ *
+ * v0.12 Feature #5: 数字常量在「无 num_split 盲化 + 32-bit 整数」时改用 tag 3
+ * + zigzag/LEB128 varint 编码（小整数 1 字节）。否则回退到 tag 2 + f64。
+ *   tag 0: string  (len-prefixed)
+ *   tag 1: bool    (1 byte)
+ *   tag 2: number  (f64, 8 bytes) — 旧格式 / 浮点 / 盲化数值
+ *   tag 3: number  (varint, 1-5 bytes) — 32-bit 整数压缩格式
  */
 function writeConstant(buf: number[], entry: ConstEntry, blind?: BlindDesc | null): void {
   switch (entry.type) {
@@ -218,14 +271,24 @@ function writeConstant(buf: number[], entry: ConstEntry, blind?: BlindDesc | nul
       writeU8(buf, 1);
       writeU8(buf, entry.value ? 1 : 0);
       break;
-    case "number":
-      writeU8(buf, 2);
+    case "number": {
+      // v0.12 Feature #5: 无 num_split 盲化且为 32-bit 整数 → tag 3 + varint。
+      // 盲化路径下 stored = value + k2，通常非整数，必须保留 tag 2 + f64。
       if (blind && blind.kind === "num_split") {
+        writeU8(buf, 2);
         writeF64(buf, entry.value + blind.k2);  // stored = k1
       } else {
-        writeF64(buf, entry.value);
+        const tmp: number[] = [];
+        if (writeVarint(tmp, entry.value)) {
+          writeU8(buf, 3);
+          for (const b of tmp) buf.push(b);
+        } else {
+          writeU8(buf, 2);
+          writeF64(buf, entry.value);
+        }
       }
       break;
+    }
   }
 }
 
@@ -355,6 +418,14 @@ export function serializeFunction(func: FuncPrototype): string {
     }
   }
 
+  // v0.12 Feature #4: 寄存器窗口化。写一个 hasRegCount 标志 + regCount 字节。
+  // 反序列化端没有该字节（旧 proto）时回退到 256，向后兼容。
+  const hasRegCount = func.regCount !== undefined && func.regCount >= 0 && func.regCount <= 0xFF;
+  writeU8(buf, hasRegCount ? 1 : 0);
+  if (hasRegCount) {
+    writeU8(buf, func.regCount! & 0xFF);
+  }
+
   // Convert byte array to binary string
   return Buffer.from(buf).toString("binary");
 }
@@ -454,6 +525,11 @@ export function deserializeFunction(data: string, offset: number = 0): [FuncProt
       let b: number;
       [b, pos] = readU8(bytes, pos);
       constants.push({ type: "bool", value: b !== 0 });
+    } else if (typeTag === 3) {
+      // v0.12 Feature #5: varint 编码的 32-bit 整数。
+      let d: number;
+      [d, pos] = readVarint(bytes, pos);
+      constants.push({ type: "number", value: d });
     } else {
       let d: number;
       [d, pos] = readF64(bytes, pos);
@@ -605,6 +681,20 @@ export function deserializeFunction(data: string, offset: number = 0): [FuncProt
     }
   }
 
+  // v0.12 Feature #4: 寄存器窗口化。读取 hasRegCount 标志 + regCount 字节。
+  // 旧 proto（v0.11 及以前）此处已是 end-of-buffer → 不读，regCount 保持
+  // undefined，运行时回退到 256 槽（向后兼容）。
+  let regCount: number | undefined = undefined;
+  if (isV06 && pos + 1 <= bytes.length) {
+    let hasRC: number;
+    [hasRC, pos] = readU8(bytes, pos);
+    if (hasRC !== 0 && pos + 1 <= bytes.length) {
+      let rc: number;
+      [rc, pos] = readU8(bytes, pos);
+      regCount = rc;
+    }
+  }
+
   // 指令解密：根据 insnCryptMode 选择 F4 或 F6。
   if (insnSeed !== undefined) {
     if (insnCryptMode === INSN_CRYPT_F6 && insnIv !== undefined) {
@@ -638,6 +728,7 @@ export function deserializeFunction(data: string, offset: number = 0): [FuncProt
     insnSeed,
     insnCryptMode,
     insnIv,
+    regCount,
   }, pos - offset];
 }
 
