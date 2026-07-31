@@ -21,6 +21,7 @@ program
     .option("--no-memwipe", "disable runtime memory wiping (secure_nil + GC, v0.5)")
     .option("--no-antidump", "disable anti-dump decoy blob (v0.5)")
     .option("--no-frag", "disable hex blob fragmentation (v0.7)")
+    .option("--no-keyfuse", "disable 512-bit key deep-fusion (v0.9 keyfuse)")
     .option("--no-recursive-flatten", "disable RECURSIVE control-flow flattening (D4 only at top-level, v0.6 F1)")
     .option("--no-recursive-deadcode", "disable recursive dead-code + opaque predicates (D5 only at top-level, v0.6 F2)");
 program.action((opts) => {
@@ -39,6 +40,7 @@ program.action((opts) => {
         noMemwipe: opts.memwipe === false,
         noAntidump: opts.antidump === false,
         noFrag: opts.frag === false,
+        noKeyfuse: opts.keyfuse === false,
         recursiveFlatten: opts.recursiveFlatten !== false,
         recursiveDeadcode: opts.recursiveDeadcode !== false,
     });

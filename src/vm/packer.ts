@@ -258,6 +258,30 @@ export function packBytecode(serializedFunc: string, key: number, useLZW: boolea
 }
 
 /**
+ * Pack with an additional 512-bit XOR outer layer (v0.9 keyfuse).
+ * Pipeline: serialize → LZW → streamEncrypt(8位) → xor512(512位) → hex.
+ * 运行时逆向：hex → hex_to_bytes → xor_bytes_512 → stream_decrypt → lzw_decode。
+ *
+ * @param serializedFunc The binary string from serializeFunction()
+ * @param key           8 位 stream cipher key
+ * @param keyBytes      512 位（64 字节）XOR 密钥
+ * @param useLZW        是否 LZW 压缩
+ */
+export function packBytecodeKeyfused(
+  serializedFunc: string,
+  key: number,
+  keyBytes: number[],
+  useLZW: boolean = true,
+): string {
+  let data = serializedFunc;
+  if (useLZW) data = lzwCompress(data);
+  data = streamEncrypt(data, key);
+  // v0.9: 512 位 XOR 外层（在 hex 编码前作用于二进制串）。
+  data = xor512Outer(data, keyBytes);
+  return bytesToHex(data);
+}
+
+/**
  * Unpack a hex string back to the original serialized function blob.
  *
  * @param hex The hex string from packBytecode()
@@ -278,4 +302,35 @@ export function unpackBytecode(hex: string, key: number, useLZW: boolean = true)
   }
 
   return data;
+}
+
+/**
+ * Unpack with the 512-bit XOR outer layer (inverse of packBytecodeKeyfused).
+ */
+export function unpackBytecodeKeyfused(
+  hex: string,
+  key: number,
+  keyBytes: number[],
+  useLZW: boolean = true,
+): string {
+  let data = hexToBytes(hex);
+  data = xor512Outer(data, keyBytes); // XOR 对称，同函数解密
+  data = streamDecrypt(data, key);
+  if (useLZW) data = lzwDecompress(data);
+  return data;
+}
+
+/**
+ * 512 位循环 XOR（v0.9 keyfuse 外层）。与运行时 xor_bytes_512 对齐：
+ * data 逐字节 XOR keyBytes[i % 64]。XOR 对称，加密解密同函数。
+ * 内联于此以避免 packer ↔ keyfuse 循环依赖。
+ */
+function xor512Outer(data: string, keyBytes: number[]): string {
+  const bytes = Buffer.from(data, "binary");
+  const out = Buffer.alloc(bytes.length);
+  const klen = keyBytes.length;
+  for (let i = 0; i < bytes.length; i++) {
+    out[i] = (bytes[i]! ^ keyBytes[i % klen]!) & 0xff;
+  }
+  return out.toString("binary");
 }

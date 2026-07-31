@@ -23,6 +23,8 @@ export interface ObfuscateOptions {
     noAntidump?: boolean;
     /** Disable hex blob fragmentation (v0.7). */
     noFrag?: boolean;
+    /** Disable 512-bit key deep-fusion (v0.9 keyfuse). */
+    noKeyfuse?: boolean;
     /** v0.6 F1: 递归控制流平坦化（嵌套函数/闭包也跑 D4）。默认 true。 */
     recursiveFlatten?: boolean;
     /** v0.6 F2: 递归不透明谓词包裹 + 死代码注入（每个函数作用域独立处理）。默认 true。 */

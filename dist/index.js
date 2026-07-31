@@ -11,4 +11,5 @@ export { buildIR, shuffleArray } from "./ir/ir.js";
 export { injectDeadcode, injectDeadcodeRecursive } from "./transforms/deadcode.js";
 export { compileVM, compileVMWithRuntime, deriveCipherKey } from "./vm/pipeline.js";
 export { buildRuntime } from "./vm/runtime-template.js";
+export { deriveKeyfuseKey, xor512, genKeyfuseAssembly } from "./vm/keyfuse.js";
 //# sourceMappingURL=index.js.map

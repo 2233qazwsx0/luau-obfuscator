@@ -6,6 +6,8 @@ export interface RuntimeProtectOptions {
     antidump?: boolean;
     /** 启用 hex blob 碎片化（v0.7）：拆散为 N 碎片，D4 散入 dispatch case。 */
     frag?: boolean;
+    /** 启用 512 位密钥深度融合（v0.9 keyfuse）：XOR 外层 + 碎片宿主 + 乱序装配。 */
+    keyfuse?: boolean;
 }
 /** 默认全开。 */
 export declare const DEFAULT_RUNTIME_PROTECT: RuntimeProtectOptions;

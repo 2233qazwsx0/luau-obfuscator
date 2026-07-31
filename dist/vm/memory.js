@@ -10,6 +10,7 @@ export const DEFAULT_RUNTIME_PROTECT = {
     memwipe: true,
     antidump: true,
     frag: true,
+    keyfuse: true,
 };
 /**
  * 生成一段假字节码 blob（hex 字符串），用于反 dump 诱饵。

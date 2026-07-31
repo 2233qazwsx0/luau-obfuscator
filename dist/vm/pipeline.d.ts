@@ -23,9 +23,12 @@ export declare function compileVM(ast: Node, seed: number): VmResult;
  * Compile an AST to packed bytecode AND wrap it in the Luau runtime template.
  * The returned string is a complete, executable Luau script.
  *
+ * v0.9 keyfuse：opts.keyfuse 开启时，在 stream cipher 外层加 512 位 XOR 层，
+ * 并把密钥拆成 128 个 nibble 碎片深度融合到运行时代码中。
+ *
  * @param ast  - The parsed AST (Block node)
  * @param seed - PRNG seed
- * @param opts - 运行时保护选项（内存清理 / 反 dump / 碎片化，默认全开）
+ * @param opts - 运行时保护选项（内存清理 / 反 dump / 碎片化 / keyfuse，默认全开）
  * @returns Final Luau source that decodes and executes the bytecode
  */
 export declare function compileVMWithRuntime(ast: Node, seed: number, opts?: RuntimeProtectOptions): string;

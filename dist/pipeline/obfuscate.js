@@ -72,6 +72,7 @@ export function runPipeline(src, opts = {}) {
                 memwipe: !opts.noMemwipe,
                 antidump: !opts.noAntidump,
                 frag: !opts.noFrag,
+                keyfuse: !opts.noKeyfuse,
             };
             const runtimeSrc = compileVMWithRuntime(ast, seed, rtOpts);
             // Self-obfuscate the runtime template through the D1-D3 pipeline only.

@@ -64,6 +64,17 @@ export declare function xorByte(byte: number, key: number): number;
  */
 export declare function packBytecode(serializedFunc: string, key: number, useLZW?: boolean): string;
 /**
+ * Pack with an additional 512-bit XOR outer layer (v0.9 keyfuse).
+ * Pipeline: serialize → LZW → streamEncrypt(8位) → xor512(512位) → hex.
+ * 运行时逆向：hex → hex_to_bytes → xor_bytes_512 → stream_decrypt → lzw_decode。
+ *
+ * @param serializedFunc The binary string from serializeFunction()
+ * @param key           8 位 stream cipher key
+ * @param keyBytes      512 位（64 字节）XOR 密钥
+ * @param useLZW        是否 LZW 压缩
+ */
+export declare function packBytecodeKeyfused(serializedFunc: string, key: number, keyBytes: number[], useLZW?: boolean): string;
+/**
  * Unpack a hex string back to the original serialized function blob.
  *
  * @param hex The hex string from packBytecode()
@@ -72,3 +83,7 @@ export declare function packBytecode(serializedFunc: string, key: number, useLZW
  * @returns The binary string (serialized function)
  */
 export declare function unpackBytecode(hex: string, key: number, useLZW?: boolean): string;
+/**
+ * Unpack with the 512-bit XOR outer layer (inverse of packBytecodeKeyfused).
+ */
+export declare function unpackBytecodeKeyfused(hex: string, key: number, keyBytes: number[], useLZW?: boolean): string;

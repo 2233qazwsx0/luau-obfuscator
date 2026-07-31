@@ -520,6 +520,26 @@ local function str_xor(s, key)
   return table.concat(parts)
 end
 
+--[[__KEYFUSE_HELPERS_BEGIN__]]
+-- v0.9 keyfuse: 512 位循环 XOR（与 src/vm/keyfuse.ts xor512 对齐）。
+-- data 逐字节 XOR keyBytes[i % 64]；XOR 对称，加密解密同函数。
+-- keyHex 是 128 hex 字符串（512 位），运行时 hex 解析为 64 字节密钥。
+local function xor_bytes_512(data, keyHex)
+  local klen = #keyHex / 2
+  local key = {}
+  for i = 1, klen do
+    key[i] = tonumber(string.sub(keyHex, (i - 1) * 2 + 1, i * 2), 16)
+  end
+  local out = {}
+  for i = 1, #data do
+    local b = string.byte(data, i)
+    local k = key[((i - 1) % klen) + 1] or 0
+    out[i] = string.char(bxor32(b, k) % 256)
+  end
+  return table.concat(out)
+end
+--[[__KEYFUSE_HELPERS_END__]]
+
 -- 返回常量 i（1-indexed），首次访问时若存在 blind_desc 则解密并缓存。
 -- proto.constants[i] == nil 表示首次访问（已盲化）。
 local function make_const_access(proto)
@@ -551,6 +571,14 @@ local function make_const_access(proto)
     return r
   end
 end
+
+--[[__KEYFUSE_REAL_BEGIN__]]
+-- v0.9 keyfuse: 真实融合宿主定义（早期段，vm_execute 之前）。
+-- _rf1/_rf2 被假 VM 分支的 junk 计算引用（作为 upvalue），同时其低 nibble
+-- 承载密钥碎片。值 = magic_base + key_nibble（magic_base 为 16 的倍数）。
+-- 修改 _rf1/_rf2 → junk 变更（惰性）+ 密钥碎片损坏 → 解密失败崩溃。
+-- 整段由 src/vm/runtime-template.ts 用 genKeyfuseAssembly().realFusedCode 替换。
+--[[__KEYFUSE_REAL_END__]]
 
 -- --------------------------------------------------------------------------
 -- VM execution engine — 70+ opcode dispatch
@@ -608,7 +636,10 @@ function vm_execute(proto, env, upvals, args)
     -- v0.6 F5：假 VM 分支 → 写入高寄存器(200..255)惰性垃圾并立即退回最近真VM。
     -- 真执行永远不会走这里；假 VM 只在不透明谓词的永假分支里 SWITCH_VM 到。
     if current_vm == 3 or current_vm == 4 then
-      local junk = (ip * 1315423911 + current_vm * 2654435761) % 4294967296
+      -- v0.9 keyfuse: junk 魔数由 __KF_JUNK1__/__KF_JUNK2__ 占位符替换。
+      --   keyfuse 开启 → 替换为 _rf1/_rf2（真实融合宿主，承载密钥碎片）。
+      --   keyfuse 关闭 → 替换为原始字面量 1315423911 / 2654435761。
+      local junk = (ip * __KF_JUNK1__ + current_vm * __KF_JUNK2__) % 4294967296
       local iter = 3 + (junk % 5)
       for f = 1, iter do
         local ridx = 200 + ((junk + f * 17) % 56)
@@ -837,6 +868,14 @@ local FAKE_BLOB = "__FAKE_BLOB__"
 --[[__BLOB_DEFS_END__]]
 local CIPHER_KEY = __CIPHER_KEY__
 
+--[[__KEYFUSE_BEGIN__]]
+-- v0.9 keyfuse: 512 位密钥深度融合装配（晚期段，vm_boot 之前）。
+-- 由 src/vm/runtime-template.ts 用 genKeyfuseAssembly().assemblyCode 替换：
+--   _kh 表混存真实+假碎片宿主；D4 风格 dispatch loop 按 _B() 动态索引打散装配；
+--   D5 风格死分支 case 结构与真碎片完全相同。装配出 128 hex 字符的 KEY。
+-- KEY 在 vm_boot 内 xor_bytes_512 解密后立即 secure_nil 销毁。
+--[[__KEYFUSE_END__]]
+
 local function vm_boot()
   local blob = HEX_BLOB
   --[[__ANTIDUMP_BOOT_BEGIN__]]
@@ -846,7 +885,14 @@ local function vm_boot()
   --[[__ANTIDUMP_BOOT_END__]]
 
   local cipher_data = hex_to_bytes(blob)
-  local decrypted = stream_decrypt(cipher_data, CIPHER_KEY)
+  -- keyfuse 关闭时 dec_input = cipher_data；开启时先做 512 位 XOR 解密。
+  local dec_input = cipher_data
+  --[[__KEYFUSE_XOR_STEP_BEGIN__]]
+  -- v0.9 keyfuse: 512 位 XOR 外层解密。KEY 由晚期装配段生成（128 hex 字符）。
+  -- 解密后立即销毁 KEY，完整密钥在内存中存活时间极短。
+  dec_input = xor_bytes_512(cipher_data, KEY)
+  --[[__KEYFUSE_XOR_STEP_END__]]
+  local decrypted = stream_decrypt(dec_input, CIPHER_KEY)
   local serialized = lzw_decode(decrypted)
   local reader = make_reader(serialized)
   local proto = deserialize_proto(reader)
@@ -863,12 +909,17 @@ local function vm_boot()
   -- 解码完成、执行前：立即清空所有中间解码数据 + 强制 GC。
   -- 此时 proto.instructions 已独立存在于内存，原始密文/明文/序列化串不再需要。
   -- dump 只能拿到反序列化后的指令数组，拿不到 LZW 解压后的完整二进制。
+  -- v0.9 keyfuse: 一并销毁 KEY 与 XOR 中间结果。
   secure_nil(cipher_data)
+  secure_nil(dec_input)
   secure_nil(decrypted)
   secure_nil(serialized)
   -- reader 内部持有 serialized 的引用（state.pos + data），一并清空。
   pcall(function() reader.state = nil end)
   secure_nil(reader)
+  --[[__KEYFUSE_MEMWIPE_BEGIN__]]
+  secure_nil(KEY)
+  --[[__KEYFUSE_MEMWIPE_END__]]
   gc_trigger()
   --[[__MEMWIPE_END__]]
 

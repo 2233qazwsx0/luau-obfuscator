@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { genFakeBlob, DEFAULT_RUNTIME_PROTECT } from "./memory.js";
+import { genKeyfuseAssembly, KEYFUSE_KEY_HEX_LEN } from "./keyfuse.js";
 const TEMPLATE_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../../runtime/vm-runtime.template.lua");
 /** 从模板里剥离一对 marker 之间的内容（含 marker 行本身）。 */
 function stripRegion(src, begin, end) {
@@ -132,13 +133,16 @@ function genFragmentedAssembly(varName, hex, seed) {
  * @param opts      运行时保护选项（默认全开）
  * @param vmSeed    v0.8 多 VM：派生 opcode 映射表的种子（与编译器同源）。
  *                  运行时用它重建 3 套 op→sem 反查表。
+ * @param keyHex    v0.9 keyfuse：512 位 XOR 密钥的 128 hex 字符串。
+ *                  null 表示 keyfuse 关闭（不加 XOR 外层）。需与 packer 端一致。
  * @returns Final Luau source that, when executed, decodes and runs the bytecode
  */
-export function buildRuntime(hex, cipherKey, opts = DEFAULT_RUNTIME_PROTECT, vmSeed = 0) {
+export function buildRuntime(hex, cipherKey, opts = DEFAULT_RUNTIME_PROTECT, vmSeed = 0, keyHex = null) {
     let template = readFileSync(TEMPLATE_PATH, "utf8");
     const memwipe = opts.memwipe !== false;
     const antidump = opts.antidump !== false;
     const frag = opts.frag !== false;
+    const keyfuse = opts.keyfuse !== false && keyHex !== null && keyHex.length === KEYFUSE_KEY_HEX_LEN;
     // 1. 内存清理区段：禁用时剥离整段，启用时只去掉 marker 注释行。
     if (!memwipe) {
         template = stripRegion(template, "__MEMWIPE_BEGIN__", "__MEMWIPE_END__");
@@ -155,7 +159,36 @@ export function buildRuntime(hex, cipherKey, opts = DEFAULT_RUNTIME_PROTECT, vmS
         template = stripMarkers(template, "__ANTIDUMP_HELPERS_BEGIN__", "__ANTIDUMP_HELPERS_END__");
         template = stripMarkers(template, "__ANTIDUMP_BOOT_BEGIN__", "__ANTIDUMP_BOOT_END__");
     }
-    // 3. hex blob 定义区段：碎片化或单串替换。
+    // 3. v0.9 keyfuse 区段处理（必须在 vm_boot 引用前完成）。
+    //    a) xor_bytes_512 helper：keyfuse 关闭时剥离，开启时去 marker。
+    //    b) __KEYFUSE_REAL__（早期段，真实融合宿主定义）：开启时替换为 realFusedCode，关闭时剥离。
+    //    c) __KEYFUSE__（晚期段，装配 dispatch loop）：开启时替换为 assemblyCode，关闭时剥离。
+    //    d) __KEYFUSE_XOR_STEP__（vm_boot 内 XOR 解密步）：关闭时剥离，开启时去 marker。
+    //    e) __KEYFUSE_MEMWIPE__（vm_boot 内 secure_nil(KEY)）：关闭时剥离，开启时去 marker。
+    //    f) __KF_JUNK1__/__KF_JUNK2__（假 VM 分支 junk 魔数）：开启→_rf1/_rf2，关闭→原始字面量。
+    if (keyfuse) {
+        template = stripMarkers(template, "__KEYFUSE_HELPERS_BEGIN__", "__KEYFUSE_HELPERS_END__");
+        template = stripMarkers(template, "__KEYFUSE_XOR_STEP_BEGIN__", "__KEYFUSE_XOR_STEP_END__");
+        template = stripMarkers(template, "__KEYFUSE_MEMWIPE_BEGIN__", "__KEYFUSE_MEMWIPE_END__");
+        // 生成 keyfuse 装配代码（真实融合宿主 + dispatch loop）。
+        const kf = genKeyfuseAssembly(keyHex, vmSeed >>> 0);
+        template = replaceRegion(template, "__KEYFUSE_REAL_BEGIN__", "__KEYFUSE_REAL_END__", kf.realFusedCode);
+        template = replaceRegion(template, "__KEYFUSE_BEGIN__", "__KEYFUSE_END__", kf.assemblyCode);
+        // 假 VM 分支 junk 魔数 → 真实融合宿主引用。
+        template = template.replace(/__KF_JUNK1__/g, "_rf1");
+        template = template.replace(/__KF_JUNK2__/g, "_rf2");
+    }
+    else {
+        template = stripRegion(template, "__KEYFUSE_HELPERS_BEGIN__", "__KEYFUSE_HELPERS_END__");
+        template = stripRegion(template, "__KEYFUSE_REAL_BEGIN__", "__KEYFUSE_REAL_END__");
+        template = stripRegion(template, "__KEYFUSE_BEGIN__", "__KEYFUSE_END__");
+        template = stripRegion(template, "__KEYFUSE_XOR_STEP_BEGIN__", "__KEYFUSE_XOR_STEP_END__");
+        template = stripRegion(template, "__KEYFUSE_MEMWIPE_BEGIN__", "__KEYFUSE_MEMWIPE_END__");
+        // 假 VM 分支 junk 魔数 → 原始字面量（与未融合行为一致）。
+        template = template.replace(/__KF_JUNK1__/g, "1315423911");
+        template = template.replace(/__KF_JUNK2__/g, "2654435761");
+    }
+    // 4. hex blob 定义区段：碎片化或单串替换。
     const fakeBlob = antidump ? genFakeBlob(hex.length, cipherKey ^ 0xFEEDFACE) : "";
     const fragSeed = (cipherKey ^ 0x7017CAFE) >>> 0;
     let blobDefs;
@@ -177,11 +210,16 @@ export function buildRuntime(hex, cipherKey, opts = DEFAULT_RUNTIME_PROTECT, vmS
     // 替换整个 __BLOB_DEFS__ 区段（含 marker）为生成的代码。
     const blobRe = new RegExp(`[^\\n]*--\\[\\[__BLOB_DEFS_BEGIN__\\]\\][\\s\\S]*?--\\[\\[__BLOB_DEFS_END__\\]\\][^\\n]*\\n?`, "g");
     template = template.replace(blobRe, blobDefs + "\n");
-    // 4. cipher key 替换（数字字面量）。
+    // 5. cipher key 替换（数字字面量）。
     template = template.replace(/__CIPHER_KEY__/g, String(cipherKey));
-    // 5. v0.8 多 VM：注入 opcode 映射表种子（数字字面量，32 位）。
+    // 6. v0.8 多 VM：注入 opcode 映射表种子（数字字面量，32 位）。
     //    运行时用它与编译器同源的 buildVmOpMap 算法重建 3 套 op→sem 表。
     template = template.replace(/__VM_SEED__/g, String(vmSeed >>> 0));
     return template;
+}
+/** 替换一对 marker 之间的内容（含 marker 行）为 replacement（保留尾换行）。 */
+function replaceRegion(src, begin, end, replacement) {
+    const re = new RegExp(`[^\\n]*--\\[\\[${begin}\\]\\][\\s\\S]*?--\\[\\[${end}\\]\\][^\\n]*\\n?`, "g");
+    return src.replace(re, replacement + "\n");
 }
 //# sourceMappingURL=runtime-template.js.map
