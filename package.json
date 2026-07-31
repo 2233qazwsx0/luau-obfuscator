@@ -39,7 +39,7 @@
   ],
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^20.11.0",
+    "@types/node": "^20.19.43",
     "commander": "^12.0.0",
     "fengari": "^0.1.5",
     "typescript": "^5.4.5",

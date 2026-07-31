@@ -18,9 +18,10 @@ export declare function deriveCipherKey(seed: number): number;
  * @param ast  - The parsed AST (Block node) from parser.parse()
  * @param seed - PRNG seed for deterministic compilation + encryption
  * @param insnCrypt - v0.11 F6 指令层加密模式（"f6" 默认 / "f4" legacy / "off"）
+ * @param compactArith - v0.12 Feature #3: 紧凑算术/比较（合并 ALU/CMP）
  * @returns Packed hex string + cipher key, ready for embedding
  */
-export declare function compileVM(ast: Node, seed: number, insnCrypt?: InsncryptMode): VmResult;
+export declare function compileVM(ast: Node, seed: number, insnCrypt?: InsncryptMode, compactArith?: boolean): VmResult;
 /**
  * Compile an AST to packed bytecode AND wrap it in the Luau runtime template.
  * The returned string is a complete, executable Luau script.
@@ -37,4 +38,4 @@ export declare function compileVM(ast: Node, seed: number, insnCrypt?: Insncrypt
  * @param opts - 运行时保护选项（内存清理 / 反 dump / 碎片化 / keyfuse / rt_deps，默认全开）
  * @returns Final Luau source that decodes and executes the bytecode
  */
-export declare function compileVMWithRuntime(ast: Node, seed: number, opts?: RuntimeProtectOptions, insnCrypt?: InsncryptMode): string;
+export declare function compileVMWithRuntime(ast: Node, seed: number, opts?: RuntimeProtectOptions, insnCrypt?: InsncryptMode, compactArith?: boolean): string;

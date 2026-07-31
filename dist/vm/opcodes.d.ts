@@ -50,7 +50,9 @@ export declare enum Op {
     FUSED_CALL_5RET = "FUSED_CALL_5RET",// op 9: call+add+mod+getfield+call+cmp
     FUSED_TAILCALL_RET = "FUSED_TAILCALL_RET",// op 11: call+tailcall+return
     FUSED_GETFIELD_CALL_CONCAT = "FUSED_GETFIELD_CALL_CONCAT",// op 19/63: getupval+getfield+call+concat+...
-    FUSED_CALL_VA_RET = "FUSED_CALL_VA_RET"
+    FUSED_CALL_VA_RET = "FUSED_CALL_VA_RET",// op 16: call with vararg count from aO
+    ALU = "ALU",// R[A] = R[B] (D) R[C]   D: 0=+ 1=- 2=* 3=/ 4=% 5=^
+    CMP = "CMP"
 }
 export declare const OP_ALIASES: Record<number, Op>;
 export declare function getAliases(op: Op): number[];
@@ -81,6 +83,7 @@ export interface FuncPrototype {
         b8: number;
         b9: number;
     };
+    regCount?: number;
 }
 export type BlindDesc = {
     kind: "num_split";

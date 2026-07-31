@@ -11,5 +11,9 @@ export interface CompilerOptions {
      * - "off"       : 不加密（insnSeed 不设，明文写指令，仅用于调试）
      */
     insnCrypt?: InsncryptMode;
+    /** v0.12 Feature #3: 紧凑算术/比较。开启后 ADD/SUB/MUL/DIV/MOD/POW 合并为
+     *  ALU 指令（D 字段编码运算类型），EQ/NEQ/LT/LE/GT/GE 合并为 CMP 指令。
+     *  减少 dispatch 分支数量。默认 false（不破坏现有字节码）。 */
+    compactArith?: boolean;
 }
 export declare function compileAST(ast: Node, seed: number, opts?: CompilerOptions): FuncPrototype;

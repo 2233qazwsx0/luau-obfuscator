@@ -38,15 +38,17 @@ export function deriveCipherKey(seed: number): number {
  * @param ast  - The parsed AST (Block node) from parser.parse()
  * @param seed - PRNG seed for deterministic compilation + encryption
  * @param insnCrypt - v0.11 F6 指令层加密模式（"f6" 默认 / "f4" legacy / "off"）
+ * @param compactArith - v0.12 Feature #3: 紧凑算术/比较（合并 ALU/CMP）
  * @returns Packed hex string + cipher key, ready for embedding
  */
 export function compileVM(
   ast: Node,
   seed: number,
   insnCrypt: InsncryptMode = "f6",
+  compactArith: boolean = false,
 ): VmResult {
   const cipherKey = deriveCipherKey(seed);
-  const compilerOpts: CompilerOptions = { insnCrypt };
+  const compilerOpts: CompilerOptions = { insnCrypt, compactArith };
   const proto = compileAST(ast, seed, compilerOpts);
   const serialized = serializeFunction(proto);
   // v0.8: LZW 移除，packBytecode 内部仅做 stream encrypt + hex。
@@ -75,9 +77,10 @@ export function compileVMWithRuntime(
   seed: number,
   opts: RuntimeProtectOptions = DEFAULT_RUNTIME_PROTECT,
   insnCrypt: InsncryptMode = "f6",
+  compactArith: boolean = false,
 ): string {
   const cipherKey = deriveCipherKey(seed);
-  const compilerOpts: CompilerOptions = { insnCrypt };
+  const compilerOpts: CompilerOptions = { insnCrypt, compactArith };
   const proto = compileAST(ast, seed, compilerOpts);
   const serialized = serializeFunction(proto);
   const keyfuseOn = opts.keyfuse !== false;

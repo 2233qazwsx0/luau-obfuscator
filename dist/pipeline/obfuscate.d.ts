@@ -45,6 +45,10 @@ export interface ObfuscateOptions {
     /** v0.12 Feature #2: 自动识别关键逻辑函数（HttpGet/loadstring/卡密/白名单校验）
      *  进 VM。仅在无 --@vm 注解时生效。默认 true。传 false 关闭自动识别。 */
     vmAutoIdentify?: boolean;
+    /** v0.12 Feature #3: 紧凑算术/比较。VM 编译时 ADD/SUB/MUL/DIV/MOD/POW 合并为
+     *  ALU 指令，EQ/NEQ/LT/LE/GT/GE 合并为 CMP 指令。减少 dispatch 分支数量。
+     *  默认 false（不破坏现有字节码）。仅 vm/runtime 模式生效。 */
+    compactArith?: boolean;
     /** @internal 递归自调用标记，抑制重复追加签名。 */
     _internal?: boolean;
 }

@@ -868,193 +868,212 @@ function vm_execute(proto, env, upvals, args)
       local sem = maps[current_vm][op]
       local A, B, C, D = inst.A, inst.B, inst.C, inst.D
 
-      -- ---- Arithmetic ----
-      if sem == "ADD_RC" then              -- R[A] = R[B] + K[C]
-        regs[A] = (regs[B] or 0) + (K(C + 1) or 0)
-      elseif sem == "ADD_RR" then          -- R[A] = R[B] + R[C]
-        regs[A] = (regs[B] or 0) + (regs[C] or 0)
-      elseif sem == "SUB_RR" then
-        regs[A] = (regs[B] or 0) - (regs[C] or 0)
-      elseif sem == "MUL_RR" then
-        regs[A] = (regs[B] or 0) * (regs[C] or 0)
-      elseif sem == "DIV_RR" then
-        regs[A] = (regs[B] or 0) / (regs[C] or 0)
-      elseif sem == "MOD_RR" then
-        regs[A] = (regs[B] or 0) % (regs[C] or 0)
-      elseif sem == "MOD_RC" then          -- R[A] = R[B] % K[C]
-        regs[A] = (regs[B] or 0) % (K(C + 1) or 0)
-      elseif sem == "POW_RR" then
-        regs[A] = (regs[B] or 0) ^ (regs[C] or 0)
+      -- v0.12 Feature #6: Dispatch 嵌套分支树。
+      -- 将原 ~40 条平铺 if-elseif 重构为 3 层嵌套树：
+      --   Tier 1 (hot ~70%): 数据移动 / 调用 / 返回 / 常见表访问 / 跳转
+      --   Tier 2 (warm ~20%): 算术 / 比较 / 闭包 / 条件测试 / 表写入
+      --   Tier 3 (cold ~10%): 循环 / upvalue / 罕见表操作 / fused
+      -- 热路径平均比较次数从 ~20 降到 ~6。
 
-      -- ---- Direct comparison (v0.4) ----
-      elseif sem == "EQ_RR" then
-        regs[A] = (regs[B] == regs[C])
-      elseif sem == "NEQ_RR" then
-        regs[A] = (regs[B] ~= regs[C])
-      elseif sem == "LT_RR_SET" then
-        regs[A] = (regs[B] < regs[C])
-      elseif sem == "LE_RR_SET" then
-        regs[A] = (regs[B] <= regs[C])
-      elseif sem == "GT_RR_SET" then
-        regs[A] = (regs[B] > regs[C])
-      elseif sem == "GE_RR_SET" then
-        regs[A] = (regs[B] >= regs[C])
-
-      -- ---- Data movement ----
-      elseif sem == "MOVE" then
-        regs[A] = regs[B]
-      elseif sem == "LOADK" then
-        regs[A] = K(B + 1)
-      elseif sem == "LOADBOOL" then        -- C=2 sentinel → new table
-        if C == 2 then
-          regs[A] = {}
-        else
-          regs[A] = (C ~= 0)
-        end
-      elseif sem == "LEN" then
-        regs[A] = #regs[B]
-      elseif sem == "CONCAT" then          -- R[A] = R[B]....R[D]
-        local s = regs[B]
-        for i = B + 1, D do
-          s = s .. regs[i]
-        end
-        regs[A] = s
-
-      -- ---- Table access ----
-      elseif sem == "GETFIELD_K" then      -- R[A+1]=R[B]; R[A]=R[B][K[C]]
-        regs[A + 1] = regs[B]
-        regs[A] = regs[B][K(C + 1)]
-      elseif sem == "GETFIELD_K2" then     -- R[A] = R[B][K[C]]
-        regs[A] = regs[B][K(C + 1)]
-      elseif sem == "GETTABLE_RR" then     -- R[A] = R[B][R[C]]
-        regs[A] = regs[B][regs[C]]
-      elseif sem == "SETTABLE" then        -- R[A][K[B]] = R[C]
-        regs[A][K(B + 1)] = regs[C]
-      elseif sem == "SETTABLE_RR" then     -- R[A][R[B]] = R[C]
-        regs[A][regs[B]] = regs[C]
-
-      -- ---- Upvalues / Globals ----
-      -- GETUPVAL 被编译器复用为全局访问：R[A] = env[K[B]]
-      elseif sem == "GETUPVAL" then
-        regs[A] = env[K(B + 1)]
-      elseif sem == "SETGLOBAL" then       -- env[K[B]] = R[A]
-        env[K(B + 1)] = regs[A]
-      elseif sem == "GETUPVAL_REAL" then   -- R[A] = upvals[B+1].v
-        regs[A] = upvals[B + 1].v
-      elseif sem == "SETUPVAL_REAL" then   -- upvals[B+1].v = R[A]
-        upvals[B + 1].v = regs[A]
-
-      -- ---- Closures ----
-      elseif sem == "CLOSURE" or sem == "CLOSURE_SIMPLE" then
-        local sub = proto.sub_functions[B + 1]
-        if sub == nil then
-          error("VM: CLOSURE sub nil! B=" .. tostring(B) .. " nsubs=" .. tostring(#proto.sub_functions) .. " ip=" .. tostring(ip) .. " vm=" .. tostring(current_vm))
-        end
-        regs[A] = make_closure(sub, env, regs, upvals, A)
-
-      -- ---- Calls ----
-      -- A=callee, B=arg count, C=result count (0=discard, N=put N results in R[A..])
-      elseif sem == "CALL_RET_N" then
-        local callee = regs[A]
-        local results
-        if B == 0 then
-          results = { callee() }
-        else
+      -- ====== Tier 1: hot path ======
+      if sem == "MOVE" or sem == "LOADK" or sem == "CALL_1RET" or sem == "CALL_RET_N"
+         or sem == "RETURN0" or sem == "RETURN_N" or sem == "GETFIELD_K2"
+         or sem == "GETFIELD_K" or sem == "GETUPVAL" or sem == "JUMP" then
+        if sem == "MOVE" then
+          regs[A] = regs[B]
+        elseif sem == "LOADK" then
+          regs[A] = K(B + 1)
+        elseif sem == "CALL_1RET" then       -- 1 result
+          local callee = regs[A]
           local call_args = {}
           for i = 1, B do call_args[i] = regs[A + i] end
-          results = { callee(unpack(call_args)) }
-        end
-        if C >= 1 then
-          for i = 1, C do
-            regs[A + i - 1] = results[i]
+          regs[A] = callee(unpack(call_args))
+        elseif sem == "CALL_RET_N" then
+          -- A=callee, B=arg count, C=result count (0=discard, N=put N results in R[A..])
+          local callee = regs[A]
+          local results
+          if B == 0 then
+            results = { callee() }
+          else
+            local call_args = {}
+            for i = 1, B do call_args[i] = regs[A + i] end
+            results = { callee(unpack(call_args)) }
           end
-        end
-      elseif sem == "CALL_1RET" then       -- 1 result
-        local callee = regs[A]
-        local call_args = {}
-        for i = 1, B do call_args[i] = regs[A + i] end
-        regs[A] = callee(unpack(call_args))
-      elseif sem == "CALL_TAILCALL" then
-        local callee = regs[A]
-        local call_args = {}
-        for i = 1, B do call_args[i] = regs[A + i] end
-        return callee(unpack(call_args))
-
-      -- ---- Returns ----
-      elseif sem == "RETURN0" then
-        return
-      elseif sem == "RETURN_N" then        -- C = count + 1
-        local ret_vals = {}
-        for i = 1, C - 1 do
-          ret_vals[i] = regs[A + i - 1]
-        end
-        return unpack(ret_vals)
-      elseif sem == "RETURN_VA" then       -- treat like RETURN_N
-        local ret_vals = {}
-        for i = 1, C - 1 do
-          ret_vals[i] = regs[A + i - 1]
-        end
-        return unpack(ret_vals)
-
-      -- ---- Control flow ----
-      elseif sem == "JUMP" then            -- ip += C
-        ip = ip + C - 1
-      elseif sem == "TEST_FALSE" then      -- if not R[A] → ip += C
-        if not regs[A] then
-          ip = ip + C - 1
-        end
-      elseif sem == "TEST_EQ_K" then       -- if R[A]==K[C] → pc++ else pc+=C
-        if regs[A] == K(C + 1) then
-          -- fall through (ip += 1)
-        else
-          ip = ip + C - 1
-        end
-      elseif sem == "TEST_LT_RR" then      -- if R[A]<R[B] → pc++ else pc+=C
-        if regs[A] < regs[B] then
-          -- fall through
-        else
-          ip = ip + C - 1
-        end
-      elseif sem == "TEST_LE_RR" then
-        if regs[A] <= regs[B] then
-          -- fall through
-        else
-          ip = ip + C - 1
-        end
-      elseif sem == "TEST_NIL" then
-        if not regs[B] then
-          -- fall through
-        else
-          regs[A] = regs[B]
+          if C >= 1 then
+            for i = 1, C do
+              regs[A + i - 1] = results[i]
+            end
+          end
+        elseif sem == "RETURN0" then
+          return
+        elseif sem == "RETURN_N" then        -- C = count + 1
+          local ret_vals = {}
+          for i = 1, C - 1 do
+            ret_vals[i] = regs[A + i - 1]
+          end
+          return unpack(ret_vals)
+        elseif sem == "GETFIELD_K2" then     -- R[A] = R[B][K[C]]
+          regs[A] = regs[B][K(C + 1)]
+        elseif sem == "GETFIELD_K" then      -- R[A+1]=R[B]; R[A]=R[B][K[C]]
+          regs[A + 1] = regs[B]
+          regs[A] = regs[B][K(C + 1)]
+        elseif sem == "GETUPVAL" then        -- 全局访问：R[A] = env[K[B]]
+          regs[A] = env[K(B + 1)]
+        else                                 -- JUMP: ip += C
           ip = ip + C - 1
         end
 
-      -- ---- Loops ----
-      elseif sem == "FORPREP" then         -- R[A]-=R[A+2]; ip += C
-        regs[A] = (regs[A] or 0) - (regs[A + 2] or 0)
-        ip = ip + C - 1
-      elseif sem == "FORLOOP" then         -- R[A]+=R[A+2]; if bounds → R[A+3]=R[A]; ip+=C
-        regs[A] = (regs[A] or 0) + (regs[A + 2] or 0)
-        local step = regs[A + 2] or 0
-        local limit = regs[A + 1] or 0
-        local cont = (step >= 0 and regs[A] <= limit) or (step < 0 and regs[A] >= limit)
-        if cont then
-          regs[A + 3] = regs[A]
-          ip = ip + C - 1
+      -- ====== Tier 2: warm path ======
+      elseif sem == "ADD_RR" or sem == "ADD_RC" or sem == "SUB_RR" or sem == "MUL_RR"
+         or sem == "DIV_RR" or sem == "MOD_RR" or sem == "MOD_RC" or sem == "POW_RR"
+         or sem == "EQ_RR" or sem == "NEQ_RR" or sem == "LT_RR_SET" or sem == "LE_RR_SET"
+         or sem == "GT_RR_SET" or sem == "GE_RR_SET"
+         or sem == "SETTABLE" or sem == "TEST_FALSE" or sem == "TEST_EQ_K"
+         or sem == "CLOSURE" or sem == "CLOSURE_SIMPLE" or sem == "CALL_TAILCALL"
+         or sem == "ALU" or sem == "CMP" then
+        if sem == "ADD_RC" then              -- R[A] = R[B] + K[C]
+          regs[A] = (regs[B] or 0) + (K(C + 1) or 0)
+        elseif sem == "ADD_RR" then          -- R[A] = R[B] + R[C]
+          regs[A] = (regs[B] or 0) + (regs[C] or 0)
+        elseif sem == "SUB_RR" then
+          regs[A] = (regs[B] or 0) - (regs[C] or 0)
+        elseif sem == "MUL_RR" then
+          regs[A] = (regs[B] or 0) * (regs[C] or 0)
+        elseif sem == "DIV_RR" then
+          regs[A] = (regs[B] or 0) / (regs[C] or 0)
+        elseif sem == "MOD_RR" then
+          regs[A] = (regs[B] or 0) % (regs[C] or 0)
+        elseif sem == "MOD_RC" then          -- R[A] = R[B] % K[C]
+          regs[A] = (regs[B] or 0) % (K(C + 1) or 0)
+        elseif sem == "POW_RR" then
+          regs[A] = (regs[B] or 0) ^ (regs[C] or 0)
+        elseif sem == "EQ_RR" then
+          regs[A] = (regs[B] == regs[C])
+        elseif sem == "NEQ_RR" then
+          regs[A] = (regs[B] ~= regs[C])
+        elseif sem == "LT_RR_SET" then
+          regs[A] = (regs[B] < regs[C])
+        elseif sem == "LE_RR_SET" then
+          regs[A] = (regs[B] <= regs[C])
+        elseif sem == "GT_RR_SET" then
+          regs[A] = (regs[B] > regs[C])
+        elseif sem == "GE_RR_SET" then
+          regs[A] = (regs[B] >= regs[C])
+        elseif sem == "SETTABLE" then        -- R[A][K[B]] = R[C]
+          regs[A][K(B + 1)] = regs[C]
+        elseif sem == "TEST_FALSE" then      -- if not R[A] → ip += C
+          if not regs[A] then
+            ip = ip + C - 1
+          end
+        elseif sem == "TEST_EQ_K" then       -- if R[A]==K[C] → pc++ else pc+=C
+          if regs[A] == K(C + 1) then
+            -- fall through (ip += 1)
+          else
+            ip = ip + C - 1
+          end
+        elseif sem == "CLOSURE" or sem == "CLOSURE_SIMPLE" then
+          local sub = proto.sub_functions[B + 1]
+          if sub == nil then
+            error("VM: CLOSURE sub nil! B=" .. tostring(B) .. " nsubs=" .. tostring(#proto.sub_functions) .. " ip=" .. tostring(ip) .. " vm=" .. tostring(current_vm))
+          end
+          regs[A] = make_closure(sub, env, regs, upvals, A)
+        elseif sem == "ALU" then              -- v0.12 #3: compact arithmetic
+          local a, b = regs[B] or 0, regs[C] or 0
+          if D == 0 then regs[A] = a + b
+          elseif D == 1 then regs[A] = a - b
+          elseif D == 2 then regs[A] = a * b
+          elseif D == 3 then regs[A] = a / b
+          elseif D == 4 then regs[A] = a % b
+          else regs[A] = a ^ b end
+        elseif sem == "CMP" then              -- v0.12 #3: compact comparison
+          local a, b = regs[B], regs[C]
+          if D == 0 then regs[A] = (a == b)
+          elseif D == 1 then regs[A] = (a ~= b)
+          elseif D == 2 then regs[A] = (a < b)
+          elseif D == 3 then regs[A] = (a <= b)
+          elseif D == 4 then regs[A] = (a > b)
+          else regs[A] = (a >= b) end
+        else                                 -- CALL_TAILCALL
+          local callee = regs[A]
+          local call_args = {}
+          for i = 1, B do call_args[i] = regs[A + i] end
+          return callee(unpack(call_args))
         end
 
-      -- ---- Fused compound ops（编译器不发射，运行时不支持） ----
-      elseif sem == "FUSED_TAILCALL_VA"
-          or sem == "FUSED_CALL_LOADK_LEN_SUB"
-          or sem == "FUSED_CALL_5RET"
-          or sem == "FUSED_TAILCALL_RET"
-          or sem == "FUSED_CALL_VA_RET"
-          or sem == "FUSED_GETFIELD_CALL_CONCAT" then
-        error("VM: fused op " .. tostring(sem) .. " not supported")
-
+      -- ====== Tier 3: cold path ======
       else
-        error("VM: unknown semantic " .. tostring(sem) .. " (op=" .. tostring(op)
-            .. " vm=" .. tostring(current_vm) .. ") at ip=" .. tostring(ip))
+        if sem == "LOADBOOL" then            -- C=2 sentinel → new table
+          if C == 2 then
+            regs[A] = {}
+          else
+            regs[A] = (C ~= 0)
+          end
+        elseif sem == "LEN" then
+          regs[A] = #regs[B]
+        elseif sem == "CONCAT" then          -- R[A] = R[B]....R[D]
+          local s = regs[B]
+          for i = B + 1, D do
+            s = s .. regs[i]
+          end
+          regs[A] = s
+        elseif sem == "GETTABLE_RR" then     -- R[A] = R[B][R[C]]
+          regs[A] = regs[B][regs[C]]
+        elseif sem == "SETTABLE_RR" then     -- R[A][R[B]] = R[C]
+          regs[A][regs[B]] = regs[C]
+        elseif sem == "SETGLOBAL" then       -- env[K[B]] = R[A]
+          env[K(B + 1)] = regs[A]
+        elseif sem == "GETUPVAL_REAL" then   -- R[A] = upvals[B+1].v
+          regs[A] = upvals[B + 1].v
+        elseif sem == "SETUPVAL_REAL" then   -- upvals[B+1].v = R[A]
+          upvals[B + 1].v = regs[A]
+        elseif sem == "RETURN_VA" then       -- treat like RETURN_N
+          local ret_vals = {}
+          for i = 1, C - 1 do
+            ret_vals[i] = regs[A + i - 1]
+          end
+          return unpack(ret_vals)
+        elseif sem == "TEST_LT_RR" then      -- if R[A]<R[B] → pc++ else pc+=C
+          if regs[A] < regs[B] then
+            -- fall through
+          else
+            ip = ip + C - 1
+          end
+        elseif sem == "TEST_LE_RR" then
+          if regs[A] <= regs[B] then
+            -- fall through
+          else
+            ip = ip + C - 1
+          end
+        elseif sem == "TEST_NIL" then
+          if not regs[B] then
+            -- fall through
+          else
+            regs[A] = regs[B]
+            ip = ip + C - 1
+          end
+        elseif sem == "FORPREP" then         -- R[A]-=R[A+2]; ip += C
+          regs[A] = (regs[A] or 0) - (regs[A + 2] or 0)
+          ip = ip + C - 1
+        elseif sem == "FORLOOP" then         -- R[A]+=R[A+2]; if bounds → R[A+3]=R[A]; ip+=C
+          regs[A] = (regs[A] or 0) + (regs[A + 2] or 0)
+          local step = regs[A + 2] or 0
+          local limit = regs[A + 1] or 0
+          local cont = (step >= 0 and regs[A] <= limit) or (step < 0 and regs[A] >= limit)
+          if cont then
+            regs[A + 3] = regs[A]
+            ip = ip + C - 1
+          end
+        elseif sem == "FUSED_TAILCALL_VA"
+            or sem == "FUSED_CALL_LOADK_LEN_SUB"
+            or sem == "FUSED_CALL_5RET"
+            or sem == "FUSED_TAILCALL_RET"
+            or sem == "FUSED_CALL_VA_RET"
+            or sem == "FUSED_GETFIELD_CALL_CONCAT" then
+          error("VM: fused op " .. tostring(sem) .. " not supported")
+        else
+          error("VM: unknown semantic " .. tostring(sem) .. " (op=" .. tostring(op)
+              .. " vm=" .. tostring(current_vm) .. ") at ip=" .. tostring(ip))
+        end
       end
     end
 

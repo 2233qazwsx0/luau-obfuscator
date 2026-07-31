@@ -74,8 +74,10 @@ export function runPipeline(src, opts = {}) {
     // If VM mode requested, branch here: compile to bytecode, skip D2/D3/emit.
     // v0.6: VM 编译器现在接收的是已经经过 D1+D5+D4 混淆的 AST，字节码内嵌混淆代码。
     // v0.11 F6: insnCrypt 决定指令层加密模式（f6 默认 / f4 legacy / off）。
+    // v0.12 F3: compactArith 决定是否合并 ALU/CMP 指令。
     if (opts.vm) {
         const insnCrypt = opts.noInsnCrypt ? "off" : "f6";
+        const compactArith = opts.compactArith === true;
         if (opts.runtime) {
             // v0.4: wrap bytecode in Luau runtime template → executable script
             // v0.5/v0.7: pass runtime-protection options through to the template builder.
@@ -87,7 +89,7 @@ export function runPipeline(src, opts = {}) {
                 dynamicAntidump: !opts.noDynamicAntidump,
                 rtDeps: !opts.noRtDeps,
             };
-            const runtimeSrc = compileVMWithRuntime(ast, seed, rtOpts, insnCrypt);
+            const runtimeSrc = compileVMWithRuntime(ast, seed, rtOpts, insnCrypt, compactArith);
             // Self-obfuscate the runtime template through the D1-D3 pipeline only.
             // The runtime template has many complex function bodies with early returns
             // inside nested If blocks. Applying D4 (flatten) or D5 (dead code) to
@@ -110,7 +112,7 @@ export function runPipeline(src, opts = {}) {
             const out = opts._internal ? selfResult.out : selfResult.out + OBFUSCATOR_SIGNATURE;
             return { out, cipher: selfResult.cipher, nameMap: renameMap };
         }
-        const vmResult = compileVM(ast, seed, insnCrypt);
+        const vmResult = compileVM(ast, seed, insnCrypt, compactArith);
         return { out: vmResult.hex, cipher, nameMap: renameMap, vmHex: vmResult.hex };
     }
     // 4-8. Number obf (D2) + String enc (D3) + emit + minify + signature.
@@ -314,7 +316,7 @@ function runSelectiveVm(ast, src, opts, seed, cipher, renameMap) {
         rtDeps: !opts.noRtDeps,
     };
     const syntheticAst = parseSafe(syntheticSrc);
-    const runtimeSrc = compileVMWithRuntime(syntheticAst, seed, rtOpts, insnCrypt);
+    const runtimeSrc = compileVMWithRuntime(syntheticAst, seed, rtOpts, insnCrypt, opts.compactArith === true);
     // 3c. 自混淆运行时模板（D1-D3，跳过 D4/D5 以避免复杂模板的 if/end 失衡）。
     //     __vm_dispatch__ 因 __ 前后缀被 D1 跳过，桩函数仍能正确调用到。
     const selfSeed = (seed ^ 0x5E1FA0) >>> 0;

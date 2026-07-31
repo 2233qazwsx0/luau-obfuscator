@@ -388,6 +388,13 @@ export function serializeFunction(func) {
             writeU32(buf, iv.b9 >>> 0);
         }
     }
+    // v0.12 Feature #4: 寄存器窗口化。写一个 hasRegCount 标志 + regCount 字节。
+    // 反序列化端没有该字节（旧 proto）时回退到 256，向后兼容。
+    const hasRegCount = func.regCount !== undefined && func.regCount >= 0 && func.regCount <= 0xFF;
+    writeU8(buf, hasRegCount ? 1 : 0);
+    if (hasRegCount) {
+        writeU8(buf, func.regCount & 0xFF);
+    }
     // Convert byte array to binary string
     return Buffer.from(buf).toString("binary");
 }
@@ -637,6 +644,19 @@ export function deserializeFunction(data, offset = 0) {
             }
         }
     }
+    // v0.12 Feature #4: 寄存器窗口化。读取 hasRegCount 标志 + regCount 字节。
+    // 旧 proto（v0.11 及以前）此处已是 end-of-buffer → 不读，regCount 保持
+    // undefined，运行时回退到 256 槽（向后兼容）。
+    let regCount = undefined;
+    if (isV06 && pos + 1 <= bytes.length) {
+        let hasRC;
+        [hasRC, pos] = readU8(bytes, pos);
+        if (hasRC !== 0 && pos + 1 <= bytes.length) {
+            let rc;
+            [rc, pos] = readU8(bytes, pos);
+            regCount = rc;
+        }
+    }
     // 指令解密：根据 insnCryptMode 选择 F4 或 F6。
     if (insnSeed !== undefined) {
         if (insnCryptMode === INSN_CRYPT_F6 && insnIv !== undefined) {
@@ -670,6 +690,7 @@ export function deserializeFunction(data, offset = 0) {
             insnSeed,
             insnCryptMode,
             insnIv,
+            regCount,
         }, pos - offset];
 }
 // ---- Instruction decoding (for tests / decrypt) ----

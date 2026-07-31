@@ -100,6 +100,12 @@ export var Op;
     Op["FUSED_TAILCALL_RET"] = "FUSED_TAILCALL_RET";
     Op["FUSED_GETFIELD_CALL_CONCAT"] = "FUSED_GETFIELD_CALL_CONCAT";
     Op["FUSED_CALL_VA_RET"] = "FUSED_CALL_VA_RET";
+    // --- v0.12 Feature #3: compact ALU/CMP (可选 compact 模式) ---
+    // ALU 合并 ADD/SUB/MUL/DIV/MOD/POW；D 字段编码运算类型。
+    // CMP 合并 EQ/NEQ/LT/LE/GT/GE；D 字段编码比较类型。
+    // 仅在 compactArith 编译选项开启时发射，不破坏现有字节码。
+    Op["ALU"] = "ALU";
+    Op["CMP"] = "CMP";
 })(Op || (Op = {}));
 // ---- Full 70-number alias table ----
 // Maps each of the 70 dispatch numbers (0-69) to a semantic Op.
@@ -193,6 +199,9 @@ export const OP_ALIASES = {
     // ---- v0.4: real upvalue access (closures capturing parent locals) ----
     82: Op.GETUPVAL_REAL, // R[A] = upvals[B]  (true upvalue by index)
     83: Op.SETUPVAL_REAL, // upvals[B] = R[A]
+    // ---- v0.12 Feature #3: compact ALU/CMP ----
+    84: Op.ALU, // R[A] = R[B] (D) R[C]
+    85: Op.CMP, // R[A] = (R[B] (D) R[C])
 };
 // Reverse map: Op → list of alias numbers
 export function getAliases(op) {

@@ -20,6 +20,7 @@ program
     .option("--runtime", "wrap VM bytecode in Luau runtime template (implies --vm, v0.4)")
     .option("--selective-vm", "v0.12 selective virtualization: only --@vm-annotated (or auto-identified) functions are VM-compiled; rest go through D1-D5")
     .option("--no-vm-auto-identify", "disable v0.12 auto-identification of key-logic functions for selective VM")
+    .option("--compact-arith", "v0.12 compact ALU/CMP: merge ADD/SUB/MUL/DIV/MOD/POW into ALU, EQ/NEQ/LT/LE/GT/GE into CMP (VM mode only)")
     .option("--no-memwipe", "disable runtime memory wiping (secure_nil + GC, v0.5)")
     .option("--no-antidump", "disable anti-dump decoy blob (v0.5)")
     .option("--no-frag", "disable hex blob fragmentation (v0.7)")
@@ -45,6 +46,7 @@ program.action((opts) => {
         runtime: opts.runtime === true,
         selectiveVm: opts.selectiveVm === true,
         vmAutoIdentify: opts.vmAutoIdentify !== false,
+        compactArith: opts.compactArith === true,
         noMemwipe: opts.memwipe === false,
         noAntidump: opts.antidump === false,
         noFrag: opts.frag === false,

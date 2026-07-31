@@ -35,7 +35,7 @@ import {
   encodeInstruction,
   decodeInstruction,
 } from "../src/vm/encoder.js";
-import type { ConstEntry } from "../src/vm/opcodes.js";
+import { Op, buildSemToOpMap, type ConstEntry } from "../src/vm/opcodes.js";
 import { compileAST } from "../src/vm/compiler.js";
 import { lex } from "../src/parser/lexer.js";
 import { parse } from "../src/parser/parser.js";
@@ -731,9 +731,10 @@ describe("encoder: F6 serialize/deserialize 往返", () => {
     });
     const serialized = serializeFunction(proto);
     const bytes = Array.from(Buffer.from(serialized, "binary"));
-    // has_insn_seed 字节 = 1，紧接着是 seed(4) + mode(1) + iv(8)
-    // 找到末尾的 has_insn_seed 位置：序列化最后 1 + 4 + 1 + 8 = 14 字节
-    const tail = bytes.slice(-14);
+    // v0.12 Feature #4 后序列化末尾布局（makeProto 未设 regCount）：
+    //   has_seed(1) + seed(4) + mode(1) + iv(8) + has_reg_count(1,值为0)
+    // = 15 字节
+    const tail = bytes.slice(-15);
     expect(tail[0]).toBe(1); // has_insn_seed
     // seed (4 bytes LE)
     const seed = (tail[1]! | (tail[2]! << 8) | (tail[3]! << 16) | (tail[4]! << 24)) >>> 0;
@@ -755,8 +756,9 @@ describe("encoder: F6 serialize/deserialize 往返", () => {
     });
     const serialized = serializeFunction(proto);
     const bytes = Array.from(Buffer.from(serialized, "binary"));
-    // 末尾 1 + 4 + 1 = 6 字节（has_seed + seed + mode，无 IV）
-    const tail = bytes.slice(-6);
+    // v0.12 Feature #4 后序列化末尾布局（makeProto 未设 regCount）：
+    //   has_seed(1) + seed(4) + mode(1) + has_reg_count(1,值为0) = 7 字节
+    const tail = bytes.slice(-7);
     expect(tail[0]).toBe(1); // has_insn_seed
     expect(tail[5]).toBe(INSN_CRYPT_F4);
   });
@@ -791,6 +793,24 @@ describe("encoder: F6 serialize/deserialize 往返", () => {
       expect(dec.instructions[i]!.A).toBe(proto.instructions[i]!.A);
     }
     expect(dec.insnSeed).toBeUndefined();
+  });
+
+  it("v0.12 Feature #4: regCount 序列化往返", () => {
+    const proto = makeProto({ seed: 0x12345678, mode: INSN_CRYPT_F6, iv: { b8: 1, b9: 2 } });
+    (proto as { regCount?: number }).regCount = 12;
+    const serialized = serializeFunction(proto);
+    const bytes = Array.from(Buffer.from(serialized, "binary"));
+    // 末尾应是 has_reg_count=1 + reg_count=12
+    expect(bytes[bytes.length - 2]).toBe(1);
+    expect(bytes[bytes.length - 1]).toBe(12);
+    const [dec] = deserializeFunction(serialized, 0);
+    expect(dec.regCount).toBe(12);
+  });
+
+  it("v0.12 Feature #4: 无 regCount 时反序列化为 undefined（向后兼容）", () => {
+    const proto = makeProto({ seed: 0x12345678, mode: INSN_CRYPT_F4 });
+    const [dec] = deserializeFunction(serializeFunction(proto), 0);
+    expect(dec.regCount).toBeUndefined();
   });
 
   it("子函数的 F6 模式也正确递归还原", () => {
@@ -1111,3 +1131,164 @@ describe("encoder: v0.12 Feature #5 varint 常量压缩", () => {
     expect(floatLen - intLen).toBeGreaterThanOrEqual(18);
   });
 });
+
+// ---- 18. v0.12 Feature #3: 紧凑算术/比较（ALU/CMP 合并）----
+
+describe("compiler: v0.12 Feature #3 compactArith", () => {
+  it("默认关闭：算术运算用独立的 ADD_RR/SUB_RR 等 opcode", () => {
+    const src = `local a = 1 + 2 - 3`;
+    const ast = parse(lex(src));
+    const proto = compileAST(ast, 42, { insnCrypt: "off" });
+    const semSet = new Set<string>();
+    collectSems(proto as unknown as ProtoLike, semSet, buildAllVmOpToSem(42));
+    // 默认模式应该出现 ADD_RR / SUB_RR，不应出现 ALU
+    expect(semSet.has("ADD_RR")).toBe(true);
+    expect(semSet.has("SUB_RR")).toBe(true);
+    expect(semSet.has("ALU")).toBe(false);
+  });
+
+  it("开启 compactArith：算术运算合并为 ALU 指令", () => {
+    const src = `local a = 1 + 2 - 3 * 4 / 5 % 6 ^ 7`;
+    const ast = parse(lex(src));
+    const proto = compileAST(ast, 42, { insnCrypt: "off", compactArith: true });
+    const semSet = new Set<string>();
+    collectSems(proto as unknown as ProtoLike, semSet, buildAllVmOpToSem(42));
+    expect(semSet.has("ALU")).toBe(true);
+    // 不应再出现独立的算术 opcode
+    expect(semSet.has("ADD_RR")).toBe(false);
+    expect(semSet.has("SUB_RR")).toBe(false);
+    expect(semSet.has("MUL_RR")).toBe(false);
+    expect(semSet.has("DIV_RR")).toBe(false);
+    expect(semSet.has("MOD_RR")).toBe(false);
+    expect(semSet.has("POW_RR")).toBe(false);
+  });
+
+  it("开启 compactArith：比较运算合并为 CMP 指令", () => {
+    const src = `local a = (1 == 2) and (3 ~= 4) and (5 < 6) and (7 > 8) and (9 <= 10) and (11 >= 12)`;
+    const ast = parse(lex(src));
+    const proto = compileAST(ast, 42, { insnCrypt: "off", compactArith: true });
+    const semSet = new Set<string>();
+    collectSems(proto as unknown as ProtoLike, semSet, buildAllVmOpToSem(42));
+    expect(semSet.has("CMP")).toBe(true);
+    expect(semSet.has("EQ_RR")).toBe(false);
+    expect(semSet.has("NEQ_RR")).toBe(false);
+    expect(semSet.has("LT_RR_SET")).toBe(false);
+    expect(semSet.has("GT_RR_SET")).toBe(false);
+    expect(semSet.has("LE_RR_SET")).toBe(false);
+    expect(semSet.has("GE_RR_SET")).toBe(false);
+  });
+
+  it("ALU 指令的 D 字段正确编码运算类型", () => {
+    const src = `local x = 10 + 20`;
+    const ast = parse(lex(src));
+    const proto = compileAST(ast, 42, { insnCrypt: "off", compactArith: true });
+    // 找到 ALU 指令（在子函数或顶层）
+    const aluInsn = findInsnBySem(proto as unknown as ProtoLike, "ALU", 42);
+    expect(aluInsn).toBeDefined();
+    expect(aluInsn!.D).toBe(0); // 0 = ADD
+  });
+
+  it("CMP 指令的 D 字段正确编码比较类型", () => {
+    const src = `local x = (10 < 20)`;
+    const ast = parse(lex(src));
+    const proto = compileAST(ast, 42, { insnCrypt: "off", compactArith: true });
+    const cmpInsn = findInsnBySem(proto as unknown as ProtoLike, "CMP", 42);
+    expect(cmpInsn).toBeDefined();
+    expect(cmpInsn!.D).toBe(2); // 2 = LT
+  });
+
+  it("compactArith 不破坏字节码序列化往返", () => {
+    const src = `local a = 1 + 2; local b = (a == 3)`;
+    const ast = parse(lex(src));
+    const proto = compileAST(ast, 42, { insnCrypt: "f6", compactArith: true });
+    const [dec] = deserializeFunction(serializeFunction(proto), 0);
+    expect(dec.instructions.length).toBe(proto.instructions.length);
+    for (let i = 0; i < proto.instructions.length; i++) {
+      expect(dec.instructions[i]!.op).toBe(proto.instructions[i]!.op);
+      expect(dec.instructions[i]!.A).toBe(proto.instructions[i]!.A);
+    }
+  });
+
+  it("pipeline compactArith 选项可正常生成 VM hex", () => {
+    const r = runPipeline('local x = 1 + 2; print(x)', {
+      seed: 42, vm: true, compactArith: true,
+    });
+    expect(r.out.length).toBeGreaterThan(0);
+    expect(r.vmHex).toBeDefined();
+  });
+});
+
+// ---- 辅助函数：递归收集 proto 树中所有指令的语义 ----
+
+interface ProtoLike {
+  instructions: { op: number; A: number; B: number; C: number; D: number; mode: number }[];
+  subFunctions: ProtoLike[];
+  vmId?: number;
+}
+
+/** v0.8 多 VM：SWITCH_VM 指令的 op 号（运行时单独 dispatch，不在 OP_ALIASES 中）。*/
+const OP_SWITCH_VM_DBG = 200;
+
+/** 构建所有 VM 的 op→sem 反查表（seed 派生，与编译器一致）。
+ *  编译器为每个函数随机分配 vmId（0/1/2），指令 op 号来自该 VM 的映射表。
+ *  注意：op 号本身在不同 VM 下对应不同语义，必须结合当前 VM 上下文反查，
+ *  不能跨 VM 取第一个命中（否则 op=57 在 VM0 是 JUMP、在 VM2 是 ADD_RR，
+ *  会误判）。*/
+function buildAllVmOpToSem(seed: number): Map<number, string>[] {
+  const rng = mulberry32((seed ^ 0xC0FFEE) >>> 0);
+  const maps: Map<number, string>[] = [];
+  for (let vm = 0; vm < 5; vm++) {
+    const semToOp = buildSemToOpMap(seed, vm, rng);
+    const opToSem = new Map<number, string>();
+    for (const [sem, op] of semToOp) opToSem.set(op, sem as string);
+    maps.push(opToSem);
+  }
+  return maps;
+}
+
+/** VM 感知地收集 proto 树中所有指令的语义。
+ *  从 proto.vmId 起步，遇到 SWITCH_VM(op=200) 时按 C 字段切换 currentVm，
+ *  这样每条指令都在其发射时的 VM 上下文中反查，避免跨 VM 误判。*/
+function collectSems(proto: ProtoLike, semSet: Set<string>, allMaps: Map<number, string>[]): void {
+  let currentVm = proto.vmId ?? 0;
+  for (const insn of proto.instructions) {
+    if (insn.op === OP_SWITCH_VM_DBG) {
+      currentVm = insn.C % allMaps.length;
+      continue;
+    }
+    const m = allMaps[currentVm]!;
+    const sem = m.get(insn.op);
+    if (sem) semSet.add(sem);
+  }
+  for (const sub of proto.subFunctions) {
+    collectSems(sub, semSet, allMaps);
+  }
+}
+
+/** VM 感知地查找第一条匹配语义的指令。
+ *  同 collectSems，按 proto.vmId 起步、SWITCH_VM 切换上下文反查。*/
+type InsnLike = { op: number; A: number; B: number; C: number; D: number; mode: number };
+function findInsnBySem(
+  proto: ProtoLike,
+  targetSemName: string,
+  seed: number,
+): InsnLike | undefined {
+  const allMaps = buildAllVmOpToSem(seed);
+  const search = (p: ProtoLike): InsnLike | undefined => {
+    let currentVm = p.vmId ?? 0;
+    for (const insn of p.instructions) {
+      if (insn.op === OP_SWITCH_VM_DBG) {
+        currentVm = insn.C % allMaps.length;
+        continue;
+      }
+      const sem = allMaps[currentVm]!.get(insn.op);
+      if (sem === targetSemName) return insn;
+    }
+    for (const sub of p.subFunctions) {
+      const found = search(sub);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return search(proto);
+}

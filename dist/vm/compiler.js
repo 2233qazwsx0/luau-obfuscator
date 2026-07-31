@@ -44,12 +44,15 @@ class Compiler {
     BLIND_NUM_MIN = 8;
     // v0.11 F6: 指令层加密模式（"f6" / "f4" / "off"）。
     insnCrypt;
+    // v0.12 Feature #3: 紧凑算术/比较模式。
+    compactArith;
     constructor(rng, seed, opts = {}) {
         this.rng = rng;
         this.seed = seed >>> 0;
         this.semToOpMaps = [];
         this.protoCounter = 0;
         this.insnCrypt = opts.insnCrypt ?? "f6";
+        this.compactArith = opts.compactArith === true;
         for (let vm = 0; vm < VM_COUNT; vm++) {
             this.semToOpMaps.push(buildSemToOpMap(seed, vm, rng));
         }
@@ -275,6 +278,10 @@ class Compiler {
         func.proto.constants = func.pool.getAll();
         func.proto.subFunctions = func.subFuncs;
         func.proto.upvalues = func.scope.upvalues;
+        // v0.12 Feature #4: 寄存器窗口化。nextReg 是本函数实际使用过的最高
+        // 寄存器槽位 + 1（含参数 + 局部 + 临时）。运行时据此 pre-size regs 表，
+        // 避免 256 槽浪费；大多数脚本函数 ≤ 10 个局部变量。
+        func.proto.regCount = func.scope.nextReg;
         // v0.6 F4 / v0.11 F6: 每个 proto 独立的指令加密 seed。
         // insnCrypt 决定模式：f6 (默认) → mode=1 + IV；f4 → mode=0；off → 不设 seed。
         if (this.insnCrypt !== "off") {
@@ -1046,52 +1053,88 @@ class Compiler {
         this.compileExpr(func, expr.rhs, rhsReg);
         switch (expr.op) {
             case "+":
-                this.emitOp(func, Op.ADD_RR, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.ALU, destReg, lhsReg, rhsReg, 0, 0);
+                else
+                    this.emitOp(func, Op.ADD_RR, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             case "-":
-                this.emitOp(func, Op.SUB_RR, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.ALU, destReg, lhsReg, rhsReg, 1, 0);
+                else
+                    this.emitOp(func, Op.SUB_RR, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             case "*":
-                this.emitOp(func, Op.MUL_RR, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.ALU, destReg, lhsReg, rhsReg, 2, 0);
+                else
+                    this.emitOp(func, Op.MUL_RR, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             case "/":
             case "//":
-                this.emitOp(func, Op.DIV_RR, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.ALU, destReg, lhsReg, rhsReg, 3, 0);
+                else
+                    this.emitOp(func, Op.DIV_RR, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             case "%":
-                this.emitOp(func, Op.MOD_RR, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.ALU, destReg, lhsReg, rhsReg, 4, 0);
+                else
+                    this.emitOp(func, Op.MOD_RR, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             case "^":
                 // v0.4: proper power operator
-                this.emitOp(func, Op.POW_RR, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.ALU, destReg, lhsReg, rhsReg, 5, 0);
+                else
+                    this.emitOp(func, Op.POW_RR, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             case "==": {
                 // v0.4: direct equality (works for any type, not just numbers)
-                this.emitOp(func, Op.EQ_RR, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.CMP, destReg, lhsReg, rhsReg, 0, 0);
+                else
+                    this.emitOp(func, Op.EQ_RR, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             }
             case "~=": {
-                this.emitOp(func, Op.NEQ_RR, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.CMP, destReg, lhsReg, rhsReg, 1, 0);
+                else
+                    this.emitOp(func, Op.NEQ_RR, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             }
             case "<": {
                 // A < B
-                this.emitOp(func, Op.LT_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.CMP, destReg, lhsReg, rhsReg, 2, 0);
+                else
+                    this.emitOp(func, Op.LT_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             }
             case ">": {
                 // A > B
-                this.emitOp(func, Op.GT_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.CMP, destReg, lhsReg, rhsReg, 4, 0);
+                else
+                    this.emitOp(func, Op.GT_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             }
             case "<=": {
                 // A <= B
-                this.emitOp(func, Op.LE_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.CMP, destReg, lhsReg, rhsReg, 3, 0);
+                else
+                    this.emitOp(func, Op.LE_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             }
             case ">=": {
                 // A >= B
-                this.emitOp(func, Op.GE_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
+                if (this.compactArith)
+                    this.emitOp(func, Op.CMP, destReg, lhsReg, rhsReg, 5, 0);
+                else
+                    this.emitOp(func, Op.GE_RR_SET, destReg, lhsReg, rhsReg, 0, 0);
                 break;
             }
             case "and":
