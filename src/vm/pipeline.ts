@@ -4,7 +4,7 @@
 // serializes to binary, packs with LZW+XOR, returns a hex string
 // suitable for embedding in a Luau runtime template.
 
-import { compileAST } from "./compiler.js";
+import { compileAST, type CompilerOptions, type InsncryptMode } from "./compiler.js";
 import { serializeFunction } from "./encoder.js";
 import { packBytecode, packBytecodeKeyfused, lzwCompress, streamEncrypt, bytesToHex } from "./packer.js";
 import { buildRuntime } from "./runtime-template.js";
@@ -31,13 +31,19 @@ export function deriveCipherKey(seed: number): number {
 /**
  * Compile an AST to packed bytecode.
  *
- * @param ast - The parsed AST (Block node) from parser.parse()
+ * @param ast  - The parsed AST (Block node) from parser.parse()
  * @param seed - PRNG seed for deterministic compilation + encryption
+ * @param insnCrypt - v0.11 F6 指令层加密模式（"f6" 默认 / "f4" legacy / "off"）
  * @returns Packed hex string + cipher key, ready for embedding
  */
-export function compileVM(ast: Node, seed: number): VmResult {
+export function compileVM(
+  ast: Node,
+  seed: number,
+  insnCrypt: InsncryptMode = "f6",
+): VmResult {
   const cipherKey = deriveCipherKey(seed);
-  const proto = compileAST(ast, seed);
+  const compilerOpts: CompilerOptions = { insnCrypt };
+  const proto = compileAST(ast, seed, compilerOpts);
   const serialized = serializeFunction(proto);
   const hex = packBytecode(serialized, cipherKey, true);
   return { hex, cipherKey };
@@ -63,9 +69,11 @@ export function compileVMWithRuntime(
   ast: Node,
   seed: number,
   opts: RuntimeProtectOptions = DEFAULT_RUNTIME_PROTECT,
+  insnCrypt: InsncryptMode = "f6",
 ): string {
   const cipherKey = deriveCipherKey(seed);
-  const proto = compileAST(ast, seed);
+  const compilerOpts: CompilerOptions = { insnCrypt };
+  const proto = compileAST(ast, seed, compilerOpts);
   const serialized = serializeFunction(proto);
   const keyfuseOn = opts.keyfuse !== false;
   const rtDepsOn = keyfuseOn && opts.rtDeps !== false;

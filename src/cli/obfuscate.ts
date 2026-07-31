@@ -26,7 +26,8 @@ program
   .option("--no-dynamic-antidump", "disable v0.10 dynamic anti-debug (timing/hook/env + periodic check)")
   .option("--no-rt-deps", "disable v0.10 runtime-dependency layer (rt_mix + keyfuse runtime nibbles)")
   .option("--no-recursive-flatten", "disable RECURSIVE control-flow flattening (D4 only at top-level, v0.6 F1)")
-  .option("--no-recursive-deadcode", "disable recursive dead-code + opaque predicates (D5 only at top-level, v0.6 F2)");
+  .option("--no-recursive-deadcode", "disable recursive dead-code + opaque predicates (D5 only at top-level, v0.6 F2)")
+  .option("--no-insn-crypt", "disable v0.11 F6 instruction-layer encryption (per-IP keystream + ROL + CBC + IV)");
 
 program.action((opts) => {
   const src = readFileSync(resolve(opts.input), "utf8");
@@ -49,6 +50,7 @@ program.action((opts) => {
     noRtDeps: opts.rtDeps === false,
     recursiveFlatten: opts.recursiveFlatten !== false,
     recursiveDeadcode: opts.recursiveDeadcode !== false,
+    noInsnCrypt: opts.insnCrypt === false,
   });
   if (opts.out) {
     writeFileSync(resolve(opts.out), out, "utf8");

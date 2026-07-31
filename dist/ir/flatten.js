@@ -27,10 +27,18 @@ const DISPATCH_PREFIX = "__b";
 const DISPATCH_VAR = DISPATCH_PREFIX;
 // Min non-exit blocks for top-level / non-function blocks.
 const MIN_BLOCKS_TOPLEVEL = 2;
-// (Nested-function flatten thresholds — reserved for future use when we
-//  fix the splitIntoBlocks duplicate-return bug. See comment in flattenRecursive.)
-void 3; // MIN_BLOCKS_FUNC
-void 0x9E3779B1; // SEED_STEP
+// v0.11: 嵌套函数平坦化阈值 + 每作用域 seed 步进。duplicate-return bug 已在
+// buildIR 修复（Return 只作 terminator），递归分支正式启用。
+const MIN_BLOCKS_FUNC = 3;
+const SEED_STEP = 0x9E3779B1;
+// v0.11: 状态转移不透明谓词概率。50% 的转移升级为
+// `__b = (OPAQUE_TRUE and T) or EXIT_STATE`，其余保持 `__b = T`。
+// 攻击者不能假设所有转移都是直赋值，必须逐 case 化简谓词。
+const OPAQUE_TRANSITION_PROB = 0.5;
+// v0.11: 假路径 case 数量范围。state ID 永不命中任何真实转移目标，
+// body 是垃圾 local + __b = -1（万一命中也安全退出）。
+const FAKE_CASE_MIN = 2;
+const FAKE_CASE_MAX = 4;
 /**
  * Main entry (v0.5 behavior): flatten only the top-level Block of `ast` into
  * a dispatch state machine. If the block has <= 1 basic block, returns the
@@ -54,21 +62,17 @@ export function flattenRecursive(ast, seed) {
     const visit = (n) => {
         // First recurse into children
         walkChildrenInPlace(n, visit);
-        // v0.6 NOTE: nested-function flattening is TEMPORARILY DISABLED.
-        // Flattening inner function bodies that contain early returns inside
-        // nested If blocks can produce duplicate case statements (see bugs on
-        // vm-runtime.template.lua line ~137). Flattening the TOP LEVEL only is
-        // both safe and already provides strong D4 coverage.
-        //
-        // Re-enable after fixing splitIntoBlocks to not duplicate tail returns.
-        //
-        // if (n.t === "Function") {
-        //   scopeCounter++;
-        //   const dispatchVar = scopeCounter === 0 ? DISPATCH_PREFIX : `${DISPATCH_PREFIX}${scopeCounter}`;
-        //   const funcSeed = (seed ^ (scopeCounter * SEED_STEP)) >>> 0;
-        //   n.body = flattenBlock(n.body, funcSeed, dispatchVar, MIN_BLOCKS_FUNC);
-        //   return n;
-        // }
+        // v0.11: 嵌套函数平坦化正式启用。duplicate-return bug 已在 buildIR 修复
+        // （Return 只作 terminator，不再进 currentStmts），dispatch 结构不再异常。
+        // 每个函数体（>= MIN_BLOCKS_FUNC 个非 exit 块）都被转成独立 dispatch 状态机，
+        // 与顶层共用 OPAQUE 转移 + 假路径 case 机制。内层先 flatten（post-order）。
+        if (n.t === "Function") {
+            scopeCounter++;
+            const dispatchVar = `${DISPATCH_PREFIX}${scopeCounter}`;
+            const funcSeed = (seed ^ (scopeCounter * SEED_STEP)) >>> 0;
+            n.body = flattenBlock(n.body, funcSeed, dispatchVar, MIN_BLOCKS_FUNC);
+            return n;
+        }
         return n;
     };
     // Flatten nested functions first.
@@ -128,8 +132,22 @@ function flattenBlock(ast, seed, dispatchVar, minNonExit) {
         }
         const stateId = stateIdMap.get(block.id) ?? 0;
         const transformedStmts = block.stmts.map((s) => localToAssign(s));
-        const ifBody = buildIfBody({ ...block, stmts: transformedStmts }, stateIdMap, dispatchVar);
+        const ifBody = buildIfBody({ ...block, stmts: transformedStmts }, stateIdMap, dispatchVar, rng);
         dispatchCases.push(makeIf(makeBinop("==", makeIdent(dispatchVar), makeNumber(String(stateId))), ifBody));
+    }
+    // v0.11: 假路径 case。state ID 永不在任何真实转移目标中，body 是垃圾 local
+    // + __b = -1（万一命中也安全退出）。结构与真实 case 完全一致，攻击者必须逆向
+    // dispatch 才能区分真假。数量 2-4 个，随机。
+    const realStateIds = new Set(stateIdMap.values());
+    const fakeCount = FAKE_CASE_MIN + Math.floor(rng() * (FAKE_CASE_MAX - FAKE_CASE_MIN + 1));
+    for (let i = 0; i < fakeCount; i++) {
+        let fakeState;
+        do {
+            fakeState = (Math.floor(rng() * 0x7fffffff) | 1) >>> 0; // 正奇数，避免 -1
+        } while (realStateIds.has(fakeState));
+        realStateIds.add(fakeState); // 避免假 case 之间重复
+        const fakeBody = makeFakeCaseBody(rng, dispatchVar);
+        dispatchCases.push(makeIf(makeBinop("==", makeIdent(dispatchVar), makeNumber(String(fakeState))), fakeBody));
     }
     dispatchCases.push(makeIf(makeBinop("==", makeIdent(dispatchVar), makeNumber(String(EXIT_STATE))), makeBlock([makeBreak()])));
     const resultBody = [
@@ -255,24 +273,30 @@ function makeLocalMulti(names) {
 /**
  * Build the body (Block) for one dispatch case: `if __b == S then <body> end`.
  * The body contains the block's statements followed by the state transition.
+ *
+ * v0.11: 状态转移以 OPAQUE_TRANSITION_PROB 概率升级为不透明谓词形式
+ * `__b = (OPAQUE_TRUE and T) or EXIT_STATE`。OPAQUE_TRUE 用 dispatchVar 自身
+ * 构造恒等式（5 种形式随机），不引入新变量。攻击者必须化简谓词才能确定转移目标。
  */
-function buildIfBody(block, stateIdMap, dispatchVar) {
+function buildIfBody(block, stateIdMap, dispatchVar, rng) {
     const stmts = [...block.stmts];
     switch (block.terminator.type) {
         case "jump": {
             const targetState = stateIdMap.get(block.terminator.target) ?? EXIT_STATE;
-            stmts.push(makeAssign(dispatchVar, makeNumber(String(targetState))));
+            stmts.push(makeStateAssign(dispatchVar, targetState, rng));
             break;
         }
         case "branch": {
             const trueState = stateIdMap.get(block.terminator.trueTarget) ?? EXIT_STATE;
             const falseState = stateIdMap.get(block.terminator.falseTarget) ?? EXIT_STATE;
-            stmts.push(makeIf(block.terminator.cond, makeBlock([makeAssign(dispatchVar, makeNumber(String(trueState)))]), makeBlock([makeAssign(dispatchVar, makeNumber(String(falseState)))])));
+            const trueAssign = makeStateAssign(dispatchVar, trueState, rng);
+            const falseAssign = makeStateAssign(dispatchVar, falseState, rng);
+            stmts.push(makeIf(block.terminator.cond, makeBlock([trueAssign]), makeBlock([falseAssign])));
             break;
         }
         case "loop": {
             const exitState = stateIdMap.get(block.terminator.exitTarget) ?? EXIT_STATE;
-            stmts.push(makeAssign(dispatchVar, makeNumber(String(exitState))));
+            stmts.push(makeStateAssign(dispatchVar, exitState, rng));
             break;
         }
         case "return": {
@@ -280,10 +304,71 @@ function buildIfBody(block, stateIdMap, dispatchVar) {
             break;
         }
         case "exit": {
-            stmts.push(makeAssign(dispatchVar, makeNumber(String(EXIT_STATE))));
+            stmts.push(makeStateAssign(dispatchVar, EXIT_STATE, rng));
             break;
         }
     }
+    return makeBlock(stmts);
+}
+/**
+ * 生成状态转移赋值 `__b = <expr>`。
+ * 以 OPAQUE_TRANSITION_PROB 概率升级为 `__b = (OPAQUE_TRUE and T) or EXIT_STATE`。
+ * OPAQUE_TRUE 恒为真 → 表达式结果恒为 T。EXIT_STATE 作为 fallback 保证万一
+ * 谓词误判也安全退出（不会无限循环）。
+ */
+function makeStateAssign(dispatchVar, targetState, rng) {
+    if (rng() >= OPAQUE_TRANSITION_PROB) {
+        return makeAssign(dispatchVar, makeNumber(String(targetState)));
+    }
+    const opaqueTrue = makeOpaqueTrue(makeIdent(dispatchVar), rng);
+    return makeAssign(dispatchVar, makeBinop("or", makeBinop("and", opaqueTrue, makeNumber(String(targetState))), makeNumber(String(EXIT_STATE))));
+}
+/**
+ * 5 种 OPAQUE_TRUE 形式，全用 dispatchVar 自身构造恒等式，不引入新变量。
+ * 形式多样化迫使攻击者不能单一模式匹配，必须逐 case 化简。
+ *   0: v == v                  恒真
+ *   1: (v - v) == 0            恒真
+ *   2: (v * 0) == 0            恒真
+ *   3: (v - v) < 1             恒真
+ *   4: v ~= (v + 1)            恒真（v 不等于 v+1）
+ */
+function makeOpaqueTrue(v, rng) {
+    const form = Math.floor(rng() * 5);
+    switch (form) {
+        case 0:
+            return makeBinop("==", v, v);
+        case 1:
+            return makeBinop("==", makeBinop("-", v, v), makeNumber("0"));
+        case 2:
+            return makeBinop("==", makeBinop("*", v, makeNumber("0")), makeNumber("0"));
+        case 3:
+            return makeBinop("<", makeBinop("-", v, v), makeNumber("1"));
+        case 4:
+            return makeBinop("~=", v, makeBinop("+", v, makeNumber("1")));
+        default:
+            return makeBinop("==", v, v);
+    }
+}
+/**
+ * 生成假路径 case body：1-2 个垃圾 local + __b = -1（安全退出）。
+ * 垃圾 local 用 __d 前缀（D1/D5 跳过），值是随机数。结构与真实 case 相似，
+ * 攻击者需逆向 dispatch 才能识别。
+ */
+function makeFakeCaseBody(rng, dispatchVar) {
+    const stmtCount = 1 + Math.floor(rng() * 2); // 1-2 个垃圾 local
+    const stmts = [];
+    for (let i = 0; i < stmtCount; i++) {
+        const idx = Math.floor(rng() * 100000);
+        const val = Math.floor(rng() * 1000000);
+        stmts.push({
+            t: "Local",
+            names: [`__d${idx}`],
+            types: [null],
+            values: [makeNumber(String(val))],
+            line: 0,
+        });
+    }
+    stmts.push(makeAssign(dispatchVar, makeNumber(String(EXIT_STATE))));
     return makeBlock(stmts);
 }
 // ---- AST node constructors ----

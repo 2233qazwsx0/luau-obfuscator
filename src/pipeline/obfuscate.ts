@@ -14,6 +14,7 @@ import { flattenAST, flattenRecursive } from "../ir/flatten.js";
 import { injectDeadcode, injectDeadcodeRecursive } from "../transforms/deadcode.js";
 import { compileVM, compileVMWithRuntime } from "../vm/pipeline.js";
 import { type RuntimeProtectOptions } from "../vm/memory.js";
+import { type InsncryptMode } from "../vm/compiler.js";
 
 export interface ObfuscateOptions {
   seed?: number;
@@ -49,6 +50,9 @@ export interface ObfuscateOptions {
   recursiveFlatten?: boolean;
   /** v0.6 F2: 递归不透明谓词包裹 + 死代码注入（每个函数作用域独立处理）。默认 true。 */
   recursiveDeadcode?: boolean;
+  /** v0.11 F6: 关闭指令层加密（F6 per-IP + ROL + CBC）。默认 false（即 F6 开启）。
+   *  仅用于调试 / 反序列化旧 proto；关闭后字节码指令字段以明文写入。 */
+  noInsnCrypt?: boolean;
   /** @internal 递归自调用标记，抑制重复追加签名。 */
   _internal?: boolean;
 }
@@ -118,7 +122,9 @@ export function runPipeline(src: string, opts: ObfuscateOptions = {}): Obfuscate
 
   // If VM mode requested, branch here: compile to bytecode, skip D2/D3/emit.
   // v0.6: VM 编译器现在接收的是已经经过 D1+D5+D4 混淆的 AST，字节码内嵌混淆代码。
+  // v0.11 F6: insnCrypt 决定指令层加密模式（f6 默认 / f4 legacy / off）。
   if (opts.vm) {
+    const insnCrypt: InsncryptMode = opts.noInsnCrypt ? "off" : "f6";
     if (opts.runtime) {
       // v0.4: wrap bytecode in Luau runtime template → executable script
       // v0.5/v0.7: pass runtime-protection options through to the template builder.
@@ -130,7 +136,7 @@ export function runPipeline(src: string, opts: ObfuscateOptions = {}): Obfuscate
         dynamicAntidump: !opts.noDynamicAntidump,
         rtDeps: !opts.noRtDeps,
       };
-      const runtimeSrc = compileVMWithRuntime(ast, seed, rtOpts);
+      const runtimeSrc = compileVMWithRuntime(ast, seed, rtOpts, insnCrypt);
       // Self-obfuscate the runtime template through the D1-D3 pipeline only.
       // The runtime template has many complex function bodies with early returns
       // inside nested If blocks. Applying D4 (flatten) or D5 (dead code) to
@@ -153,7 +159,7 @@ export function runPipeline(src: string, opts: ObfuscateOptions = {}): Obfuscate
       const out = opts._internal ? selfResult.out : selfResult.out + OBFUSCATOR_SIGNATURE;
       return { out, cipher: selfResult.cipher, nameMap: renameMap };
     }
-    const vmResult = compileVM(ast, seed);
+    const vmResult = compileVM(ast, seed, insnCrypt);
     return { out: vmResult.hex, cipher, nameMap: renameMap, vmHex: vmResult.hex };
   }
 

@@ -43,8 +43,14 @@
 //   [numUpvalues: uint8]
 //   for each upvalue: [fromStack: uint8][index: uint8]
 //   [vmId: uint8]
-//   [hasInsnSeed: uint8]       -- v0.6 F4 (0/1)
-//   if hasInsnSeed: [insnSeed: uint32 LE]
+//   [hasInsnSeed: uint8]       -- v0.6 F4 / v0.11 F6 (0/1)
+//   if hasInsnSeed:
+//     [insnSeed: uint32 LE]
+//     [insnCryptMode: uint8]   -- v0.11 F6 (0=F4 legacy, 1=F6 new). 旧 proto 无此字节
+//                                  → 反序列化时检测到 end-of-buffer 默认 F4。
+//     if insnCryptMode == 1 (F6):
+//       [ivB8: uint32 LE]      -- CBC 初始向量
+//       [ivB9: uint32 LE]
 //
 // All multi-byte integers are written little-endian to match the reference's aj().
 
@@ -55,7 +61,13 @@ import {
   type EncodeMode,
   type BlindDesc,
 } from "./opcodes.js";
-import { mulberry32 } from "../util/prng.js";
+import {
+  INSN_CRYPT_F4,
+  INSN_CRYPT_F6,
+  f4Keystream,
+  f6Encrypt,
+  f6Decrypt,
+} from "./insncrypt.js";
 
 // ---- Bit extraction helpers (mirror reference's a8 function) ----
 
@@ -225,26 +237,52 @@ function writeConstant(buf: number[], entry: ConstEntry, blind?: BlindDesc | nul
 export function serializeFunction(func: FuncPrototype): string {
   const buf: number[] = [];
 
-  // ---- F4 pre-compute instruction XOR keystream ----
+  // ---- F4/F6 pre-compute instruction encryption keystream ----
+  // v0.11 F6: per-IP keystream + per-IP ROL + CBC chaining + IV。
+  //   - insnCryptMode === 1 (F6)：用 f6Encrypt 整体加密 (b8, b9) 数组。
+  //   - insnCryptMode === 0 / undefined (F4)：保持 v0.6 行为，单 mulberry32 流 XOR。
+  //   - insnSeed === undefined：不加密，明文写指令（用于调试 / 测试）。
   const numInsn = func.instructions.length;
-  let insnKeys: number[] | null = null;
-  if (func.insnSeed !== undefined) {
-    const rng = mulberry32(func.insnSeed >>> 0);
-    insnKeys = new Array(numInsn * 2);
-    for (let i = 0; i < numInsn * 2; i++) insnKeys[i] = Math.floor(rng() * 0x100000000) >>> 0;
+  const hasSeed = func.insnSeed !== undefined;
+  const cryptMode = hasSeed ? (func.insnCryptMode ?? INSN_CRYPT_F4) : INSN_CRYPT_F4;
+  const isF6 = hasSeed && cryptMode === INSN_CRYPT_F6 && func.insnIv !== undefined;
+
+  // 先把每条指令编码成 (plainB8, plainB9)。
+  const plainB8: number[] = new Array(numInsn);
+  const plainB9: number[] = new Array(numInsn);
+  for (let i = 0; i < numInsn; i++) {
+    const [b8, b9] = encodeInstruction(func.instructions[i]!);
+    plainB8[i] = b8;
+    plainB9[i] = b9;
+  }
+
+  // 计算最终写入 buffer 的 (encB8, encB9)。
+  let encB8: number[];
+  let encB9: number[];
+  if (isF6) {
+    const r = f6Encrypt(plainB8, plainB9, func.insnSeed!, func.insnIv!);
+    encB8 = r.encB8;
+    encB9 = r.encB9;
+  } else if (hasSeed) {
+    // F4：单 mulberry32 流 XOR（保持 v0.6 行为）。
+    const { k8, k9 } = f4Keystream(func.insnSeed!, numInsn);
+    encB8 = new Array(numInsn);
+    encB9 = new Array(numInsn);
+    for (let i = 0; i < numInsn; i++) {
+      encB8[i] = ((plainB8[i]! >>> 0) ^ k8[i]!) >>> 0;
+      encB9[i] = ((plainB9[i]! >>> 0) ^ k9[i]!) >>> 0;
+    }
+  } else {
+    // 无加密：直接写明文。
+    encB8 = plainB8;
+    encB9 = plainB9;
   }
 
   // Instructions
   writeU32(buf, numInsn);
   for (let i = 0; i < numInsn; i++) {
-    const insn = func.instructions[i]!;
-    let [b8, b9] = encodeInstruction(insn);
-    if (insnKeys) {
-      b8 = ((b8 >>> 0) ^ insnKeys[i * 2]!) >>> 0;
-      b9 = ((b9 >>> 0) ^ insnKeys[i * 2 + 1]!) >>> 0;
-    }
-    writeU32(buf, b8);
-    writeU32(buf, b9);
+    writeU32(buf, encB8[i]! >>> 0);
+    writeU32(buf, encB9[i]! >>> 0);
   }
 
   // Constants
@@ -301,10 +339,21 @@ export function serializeFunction(func: FuncPrototype): string {
   // v0.8 多 VM：函数默认 VM 编号（0/1/2 真VM，3/4 假VM，向后兼容 undefined=0）。
   writeU8(buf, (func.vmId ?? 0) & 0xFF);
 
-  // v0.6 F4: instruction XOR seed presence
-  const hasSeed = func.insnSeed !== undefined;
-  writeU8(buf, hasSeed ? 1 : 0);
-  if (hasSeed) writeU32(buf, (func.insnSeed! >>> 0));
+  // v0.6 F4 / v0.11 F6: instruction encryption seed + mode + IV
+  const hasSeedByte = func.insnSeed !== undefined;
+  writeU8(buf, hasSeedByte ? 1 : 0);
+  if (hasSeedByte) {
+    writeU32(buf, (func.insnSeed! >>> 0));
+    // v0.11 F6: 写入加密模式 (0=F4, 1=F6)。
+    const mode = (func.insnCryptMode ?? INSN_CRYPT_F4) & 0xFF;
+    writeU8(buf, mode);
+    if (mode === INSN_CRYPT_F6) {
+      // F6 模式必写 IV (b8, b9)。无 IV 视为格式错误（fallback 到 F4 由反序列化端处理）。
+      const iv = func.insnIv ?? { b8: 0, b9: 0 };
+      writeU32(buf, iv.b8 >>> 0);
+      writeU32(buf, iv.b9 >>> 0);
+    }
+  }
 
   // Convert byte array to binary string
   return Buffer.from(buf).toString("binary");
@@ -523,8 +572,10 @@ export function deserializeFunction(data: string, offset: number = 0): [FuncProt
   let vmId: number;
   [vmId, pos] = readU8(bytes, pos);
 
-  // v0.6 F4: instruction XOR seed
+  // v0.6 F4 / v0.11 F6: instruction encryption seed + mode + IV
   let insnSeed: number | undefined = undefined;
+  let insnCryptMode: number = INSN_CRYPT_F4;
+  let insnIv: { b8: number; b9: number } | undefined = undefined;
   if (isV06 && pos + 1 <= bytes.length) {
     let hasSeed: number;
     [hasSeed, pos] = readU8(bytes, pos);
@@ -532,18 +583,46 @@ export function deserializeFunction(data: string, offset: number = 0): [FuncProt
       let sd: number;
       [sd, pos] = readU32(bytes, pos);
       insnSeed = sd;
+      // v0.11 F6: 检测是否有 mode 字节。旧 v0.6 proto 此处已是 end-of-buffer
+      // → 默认 F4。新 v0.11 proto 此处是 0 (F4) 或 1 (F6)。
+      if (pos + 1 <= bytes.length) {
+        let mode: number;
+        [mode, pos] = readU8(bytes, pos);
+        insnCryptMode = mode;
+        if (mode === INSN_CRYPT_F6) {
+          // F6 模式必读 IV (b8, b9)。
+          if (pos + 8 <= bytes.length) {
+            let ivB8: number, ivB9: number;
+            [ivB8, pos] = readU32(bytes, pos);
+            [ivB9, pos] = readU32(bytes, pos);
+            insnIv = { b8: ivB8, b9: ivB9 };
+          } else {
+            // 数据不完整（被截断）→ 回退到 F4。
+            insnCryptMode = INSN_CRYPT_F4;
+          }
+        }
+      }
     }
   }
 
-  // If F4 seed present, re-decode instructions with XOR keys applied.
+  // 指令解密：根据 insnCryptMode 选择 F4 或 F6。
   if (insnSeed !== undefined) {
-    const rng = mulberry32(insnSeed >>> 0);
-    for (let i = 0; i < numInsns; i++) {
-      const k8 = Math.floor(rng() * 0x100000000) >>> 0;
-      const k9 = Math.floor(rng() * 0x100000000) >>> 0;
-      const b8 = ((encB8[i]! >>> 0) ^ k8) >>> 0;
-      const b9 = ((encB9[i]! >>> 0) ^ k9) >>> 0;
-      instructions[i] = decodeInstruction(b8, b9);
+    if (insnCryptMode === INSN_CRYPT_F6 && insnIv !== undefined) {
+      // F6: per-IP keystream + per-IP ROL + CBC chaining。
+      const encB8Arr = encB8;
+      const encB9Arr = encB9;
+      const { plainB8, plainB9 } = f6Decrypt(encB8Arr, encB9Arr, insnSeed, insnIv);
+      for (let i = 0; i < numInsns; i++) {
+        instructions[i] = decodeInstruction(plainB8[i]!, plainB9[i]!);
+      }
+    } else {
+      // F4: 单 mulberry32 流 XOR（v0.6 legacy）。
+      const { k8, k9 } = f4Keystream(insnSeed, numInsns);
+      for (let i = 0; i < numInsns; i++) {
+        const b8 = ((encB8[i]! >>> 0) ^ k8[i]!) >>> 0;
+        const b9 = ((encB9[i]! >>> 0) ^ k9[i]!) >>> 0;
+        instructions[i] = decodeInstruction(b8, b9);
+      }
     }
   }
 
@@ -557,6 +636,8 @@ export function deserializeFunction(data: string, offset: number = 0): [FuncProt
     vmId,
     blindDescs,
     insnSeed,
+    insnCryptMode,
+    insnIv,
   }, pos - offset];
 }
 

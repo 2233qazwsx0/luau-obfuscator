@@ -48,7 +48,10 @@ export function buildIR(ast) {
         const stmt = body[i];
         switch (stmt.t) {
             case "Return":
-                currentStmts.push(stmt);
+                // v0.11: Return 不进 currentStmts。buildIfBody 的 case "return" 会
+                // push makeReturn(terminator.values)，如果 Return 也在 stmts 里就会
+                // 产生 duplicate return（语义上不可达，但触发 nested-flatten 时的
+                // dispatch 结构异常）。Return 只作 terminator。
                 flush({ type: "return", values: stmt.values });
                 break;
             case "If":

@@ -252,9 +252,18 @@ export interface FuncPrototype {
   // v0.6 F3: constant blinding. Parallel array to constants. Entry i != null means
   // constant[i] is stored blinded and must be un-blinded at first LOADK.
   blindDescs?: (BlindDesc | null)[];
-  // v0.6 F4: per-proto PRNG seed for instruction-field XOR keystream.
+  // v0.6 F4 / v0.11 F6: per-proto PRNG seed for instruction-field encryption.
   // undefined = not encrypted (backward compat with unencoded protos used in tests).
   insnSeed?: number;
+  // v0.11 F6: 指令层加密模式。
+  //   0 / undefined = F4 (legacy stream cipher: 单 mulberry32(insnSeed) 流 XOR)
+  //   1             = F6 (per-IP keystream + per-IP ROL + CBC chaining + IV)
+  // 新编译默认 F6；F4 路径保留用于反序列化旧 proto / 调试。
+  insnCryptMode?: number;
+  // v0.11 F6: CBC 链式加密的初始向量。insnCryptMode == 1 时必填。
+  // enc_i = ROL((plain_i ^ key_i) ^ enc_{i-1}, rot_i)，enc_{-1} = (ivB8, ivB9)。
+  // 篡改任一字节会破坏本条 + 下一条的解密（tamper propagation）。
+  insnIv?: { b8: number; b9: number };
 }
 
 // ---- v0.6 F3: constant blinding descriptors ----

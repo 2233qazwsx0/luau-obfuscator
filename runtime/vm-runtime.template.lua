@@ -322,12 +322,124 @@ local function decode_insn(b8, b9)
 end
 
 -- --------------------------------------------------------------------------
+-- v0.6 F4 / v0.11 F6: bit 助手 + mulberry32 + 指令层加密助手
+-- --------------------------------------------------------------------------
+-- 必须在 deserialize_proto 之前定义：Lua 词法作用域对 local function 的前向
+-- 引用会解析到 nil（global），deserialize_proto 在 F4/F6 解密路径中调用这些
+-- 助手，所以它们必须先声明。
+-- 与 src/vm/insncrypt.ts (rol32/ror32/f6Encrypt/f6Decrypt) 严格对齐。
+
+-- 把任意整数规范化到 [0, 2^32)（按位运算结果归一为无符号）。
+local function b32(x) return x % 4294967296 end
+
+-- 32 位逻辑右移（x 视为无符号）。用纯算术实现，避免 Luau 按位运算符
+-- （混淆器自解析阶段词法器不识别 | / &，这里统一用算术风格，与 extract_bits 一致）。
+local function bshr(x, n) return math.floor(x / (2 ^ n)) end
+
+-- 32 位按位异或（逐位算术）。a, b ∈ [0, 2^32)。
+local function bxor32(a, b)
+  local r, p = 0, 1
+  for _ = 0, 31 do
+    if (math.floor(a / p) % 2) ~= (math.floor(b / p) % 2) then r = r + p end
+    p = p * 2
+  end
+  return r
+end
+
+-- 32 位按位或。
+local function bor32(a, b)
+  local r, p = 0, 1
+  for _ = 0, 31 do
+    if (math.floor(a / p) % 2) == 1 or (math.floor(b / p) % 2) == 1 then r = r + p end
+    p = p * 2
+  end
+  return r
+end
+
+-- 32 位无符号乘法（低 32 位）。拆 16 位半字避开 double 精度丢失，
+-- 等价于 TS 端 Math.imul 的低 32 位比特模式。
+local function imul32(a, b)
+  local al = a % 65536
+  local ah = (a - al) / 65536
+  local bl = b % 65536
+  local bh = (b - bl) / 65536
+  local p = al * bl + ((al * bh + ah * bl) % 65536) * 65536
+  return p % 4294967296
+end
+
+-- v0.11 F6: 32 位循环左移 / 右移（纯算术实现，与 src/vm/insncrypt.ts rol32/ror32 对齐）。
+-- n ∈ [0, 31]。ROL(x, n) = ((x << n) | (x >> (32-n))) & 0xFFFFFFFF。
+local function rol32(x, n)
+  x = b32(x)
+  n = n % 32
+  if n == 0 then return x end
+  local lo = bshr(x, 32 - n)
+  local hi = (x * (2 ^ n)) % 4294967296
+  return bor32(hi, lo)
+end
+
+local function ror32(x, n)
+  return rol32(x, 32 - (n % 32))
+end
+
+-- mulberry32，与 src/util/prng.ts 完全一致（用上面的算术按位助手复刻）。
+local function mulberry32(seed)
+  local s = b32(seed)
+  return function()
+    s = b32(s + 0x6D2B79F5)
+    local t = s
+    t = imul32(bxor32(t, bshr(t, 15)), bor32(t, 1))
+    t = bxor32(t, b32(t + imul32(bxor32(t, bshr(t, 7)), bor32(t, 61))))
+    return b32(bxor32(t, bshr(t, 14))) / 4294967296
+  end
+end
+
+-- v0.11 F6: 派生第 i 条指令的 (k8, k9, rotB8, rotB9)。
+-- 与 src/vm/insncrypt.ts perIpParams 严格对齐：
+--   perIpSeed = insnSeed ^ imul(i + 1, 0x9E3779B1)
+--   rng = mulberry32(perIpSeed)
+--   k8 = floor(rng() * 2^32); k9 = floor(rng() * 2^32)
+--   rotB8 = 1 + floor(rng() * 31); rotB9 = 1 + floor(rng() * 31)   (强制 [1,31])
+local function f6_per_ip_params(insn_seed, i)
+  local per_ip_seed = b32(bxor32(insn_seed, imul32(i + 1, 0x9E3779B1)))
+  local rng = mulberry32(per_ip_seed)
+  local k8 = math.floor(rng() * 4294967296) % 4294967296
+  local k9 = math.floor(rng() * 4294967296) % 4294967296
+  local rot_b8 = 1 + math.floor(rng() * 31)
+  local rot_b9 = 1 + math.floor(rng() * 31)
+  return k8, k9, rot_b8, rot_b9
+end
+
+-- v0.11 F6: CBC + per-IP ROL + per-IP keystream 解密。
+--   plain_i = ROR(enc_i, rot_i) ^ enc_{i-1} ^ key_i
+--   enc_{-1} = (iv_b8, iv_b9)
+-- 与 src/vm/insncrypt.ts f6Decrypt 对齐。返回明文 (b8, b9) 数组。
+local function f6_decrypt(enc_b8, enc_b9, insn_seed, iv_b8, iv_b9, num_insns)
+  local plain_b8 = {}
+  local plain_b9 = {}
+  local prev_b8 = b32(iv_b8)
+  local prev_b9 = b32(iv_b9)
+  for i = 1, num_insns do
+    local k8, k9, rot_b8, rot_b9 = f6_per_ip_params(insn_seed, i - 1)
+    local x_b8 = bxor32(ror32(enc_b8[i], rot_b8), prev_b8)
+    local x_b9 = bxor32(ror32(enc_b9[i], rot_b9), prev_b9)
+    plain_b8[i] = bxor32(x_b8, k8)
+    plain_b9[i] = bxor32(x_b9, k9)
+    prev_b8 = b32(enc_b8[i])
+    prev_b9 = b32(enc_b9[i])
+  end
+  return plain_b8, plain_b9
+end
+
+-- --------------------------------------------------------------------------
 -- Function prototype deserializer  (inverse of encoder.serializeFunction)
 -- --------------------------------------------------------------------------
 -- v0.6 扩展：
 --   F3: 常量盲化（num_split / str_xor），存储时 + 运行时首次访问解密并缓存
 --   F4: 指令字段 XOR 加密，每 proto 独立 seed，执行时按 IP 解密
 --   F5: vm_id 扩展到 0..4 (5 VM)，末尾新增 has_insn_seed/insn_seed
+--   F6 (v0.11): per-IP keystream + per-IP ROL + CBC chaining + IV。
+--               insn_crypt_mode 字节选择 F4 (0) / F6 (1)。F6 模式额外读 8 字节 IV。
 --
 -- 检测方式：读完 constants 之后，下一个 u32 == num_consts 且 num_consts >= 1 → v0.6。
 local function deserialize_proto(reader)
@@ -421,24 +533,50 @@ local function deserialize_proto(reader)
   -- vm_id
   local vm_id = reader.u8() or 0
 
-  -- F4: has_insn_seed + insn_seed
+  -- F4 / F6: has_insn_seed + insn_seed + (v0.11) insn_crypt_mode + IV
   local insn_seed = nil
+  local insn_crypt_mode = 0  -- 0 = F4 (legacy), 1 = F6 (v0.11)
+  local iv_b8, iv_b9 = 0, 0
   if is_v06 then
     local has_seed = reader.u8()
     if has_seed and has_seed ~= 0 then
       insn_seed = reader.u32()
+      -- v0.11 F6: 检测 mode 字节。旧 v0.6 proto 此处已是 end-of-buffer
+      -- → 默认 F4。新 v0.11 proto 此处是 0 (F4) 或 1 (F6)。
+      local mode = reader.u8()
+      if mode then
+        insn_crypt_mode = mode
+        if mode == 1 then
+          -- F6 模式必读 IV (b8, b9)。
+          iv_b8 = reader.u32()
+          iv_b9 = reader.u32()
+          if iv_b8 == nil or iv_b9 == nil then
+            -- 数据不完整（被截断）→ 回退到 F4。
+            insn_crypt_mode = 0
+          end
+        end
+      end
     end
   end
 
-  -- F4: 指令解密（与 TS deserializeFunction 逻辑一致）
+  -- 指令解密：根据 insn_crypt_mode 选择 F6 或 F4。
   if insn_seed ~= nil then
-    local rng = mulberry32(insn_seed)
-    for i = 1, num_insns do
-      local k8 = math.floor(rng() * 4294967296) % 4294967296
-      local k9 = math.floor(rng() * 4294967296) % 4294967296
-      local b8 = bxor32(enc_b8[i], k8)
-      local b9 = bxor32(enc_b9[i], k9)
-      instructions[i] = decode_insn(b8, b9)
+    if insn_crypt_mode == 1 and iv_b8 ~= nil and iv_b9 ~= nil then
+      -- F6: per-IP keystream + per-IP ROL + CBC chaining + IV。
+      local plain_b8, plain_b9 = f6_decrypt(enc_b8, enc_b9, insn_seed, iv_b8, iv_b9, num_insns)
+      for i = 1, num_insns do
+        instructions[i] = decode_insn(plain_b8[i], plain_b9[i])
+      end
+    else
+      -- F4: 单 mulberry32(insn_seed) 流 XOR（v0.6 legacy）。
+      local rng = mulberry32(insn_seed)
+      for i = 1, num_insns do
+        local k8 = math.floor(rng() * 4294967296) % 4294967296
+        local k9 = math.floor(rng() * 4294967296) % 4294967296
+        local b8 = bxor32(enc_b8[i], k8)
+        local b9 = bxor32(enc_b9[i], k9)
+        instructions[i] = decode_insn(b8, b9)
+      end
     end
   end
 
@@ -496,54 +634,8 @@ local OP_ALIASES = {
 }
 
 -- 把任意整数规范化到 [0, 2^32)（按位运算结果归一为无符号）。
-local function b32(x) return x % 4294967296 end
-
--- 32 位逻辑右移（x 视为无符号）。用纯算术实现，避免 Luau 按位运算符
--- （混淆器自解析阶段词法器不识别 | / &，这里统一用算术风格，与 extract_bits 一致）。
-local function bshr(x, n) return math.floor(x / (2 ^ n)) end
-
--- 32 位按位异或（逐位算术）。a, b ∈ [0, 2^32)。
-local function bxor32(a, b)
-  local r, p = 0, 1
-  for _ = 0, 31 do
-    if (math.floor(a / p) % 2) ~= (math.floor(b / p) % 2) then r = r + p end
-    p = p * 2
-  end
-  return r
-end
-
--- 32 位按位或。
-local function bor32(a, b)
-  local r, p = 0, 1
-  for _ = 0, 31 do
-    if (math.floor(a / p) % 2) == 1 or (math.floor(b / p) % 2) == 1 then r = r + p end
-    p = p * 2
-  end
-  return r
-end
-
--- 32 位无符号乘法（低 32 位）。拆 16 位半字避开 double 精度丢失，
--- 等价于 TS 端 Math.imul 的低 32 位比特模式。
-local function imul32(a, b)
-  local al = a % 65536
-  local ah = (a - al) / 65536
-  local bl = b % 65536
-  local bh = (b - bl) / 65536
-  local p = al * bl + ((al * bh + ah * bl) % 65536) * 65536
-  return p % 4294967296
-end
-
--- mulberry32，与 src/util/prng.ts 完全一致（用上面的算术按位助手复刻）。
-local function mulberry32(seed)
-  local s = b32(seed)
-  return function()
-    s = b32(s + 0x6D2B79F5)
-    local t = s
-    t = imul32(bxor32(t, bshr(t, 15)), bor32(t, 1))
-    t = bxor32(t, b32(t + imul32(bxor32(t, bshr(t, 7)), bor32(t, 61))))
-    return b32(bxor32(t, bshr(t, 14))) / 4294967296
-  end
-end
+-- v0.11 F6: bit 助手 + mulberry32 + f6 助手已前移到 deserialize_proto 之前，
+-- 避免 Lua 词法作用域对前向 local 引用的解析问题（local function 必须先声明后使用）。
 
 -- 构建指定 VM 的 op→sem 反查表。与 buildVmOpMap 对齐。
 local function build_vm_map(seed, vmId)

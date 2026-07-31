@@ -1,8 +1,8 @@
 # Luau Obfuscator 完整实施记录
 
-> **当前发布版本：0.5.0** | 文内 v0.2 / v0.4 / v0.5 / v0.8 为各功能模块的历史实现里程碑标签，非发布版本号。
+> **当前发布版本：0.5.0** | 文内 v0.2 / v0.4 / v0.5 / v0.8 / v0.11 为各功能模块的历史实现里程碑标签，非发布版本号。
 
-> 记录 v0.2 控制流平坦化（D4）、VM 字节码编译（D6）、v0.4 VM 运行时、v0.5 反 dump / 内存清理、v0.8 多 VM 交替执行的完整实施计划与验证结果。
+> 记录 v0.2 控制流平坦化（D4）、VM 字节码编译（D6）、v0.4 VM 运行时、v0.5 反 dump / 内存清理、v0.8 多 VM 交替执行、v0.11 F6 指令层加密升级的完整实施计划与验证结果。
 
 ## 架构
 
@@ -63,6 +63,23 @@ VM + 运行时模式 (--vm --runtime):
 - **位运算兼容**：Luau 不支持 `~` `|` `&`，运行时模板用纯算术实现 `b32` / `bshr` / `bxor32` / `bor32` / `imul32` / `mulberry32`，与 TS 端 `src/util/prng.ts` 完全对齐。
 - **签名输出**：[src/pipeline/obfuscate.ts](file:///workspace/src/pipeline/obfuscate.ts) 在所有混淆输出末尾追加 `-----国人写的加密-CUA混淆器QQ3290274245`（作为 Lua 注释，不影响执行）。
 
+### v0.11 F6 指令层加密升级
+F6 在 v0.6 F4（单 mulberry32 流 XOR）基础上叠加三层强化，针对 F4 的核心弱点（keystream 单流可预测、无篡改传播）：
+- **F6.1 Per-IP keystream mixing**：每条指令的 `(k8, k9)` 由独立 mulberry32 流生成：
+  - `perIpSeed_i = insnSeed ^ imul(i + 1, 0x9E3779B1)`
+  - `rng_i = mulberry32(perIpSeed_i)`；`k8/k9 = floor(rng() * 2^32)`
+  - 攻击者从一条指令恢复 keystream **无法预测**其他指令（F4 是单流，泄露 16+ 字节即可还原状态机）。
+- **F6.2 Per-IP bit rotation**：XOR 后对 `b8/b9` 各做一次 ROL，旋转量由 per-IP rng 派生：
+  - `rotB8_i, rotB9_i ∈ [1, 31]`（强制非 0，避免退化为恒等）
+  - 即使攻击者通过差分分析拿到 keystream，比特位仍被打乱，必须额外恢复每条指令的旋转量才能还原 opcode/operand 字段。
+- **F6.3 CBC-style inter-instruction chaining + IV**：
+  - `enc_i = ROL((plain_i ^ key_i) ^ enc_{i-1}, rot_i)`，`enc_{-1} = (ivB8, ivB9)` ← 写入 proto header
+  - **tamper propagation**：篡改任一字节破坏本条 + 下一条的解密。
+  - **splice-and-replay 防御**：插入/删除任一指令都会让后续全部错位（per-IP keystream + CBC chain 双重偏移）。
+- **模式选择**：`proto.insnCryptMode` 字段（0=F4 legacy / 1=F6），编译器选项 `insnCrypt: "f6" | "f4" | "off"`，CLI `--no-insn-crypt` 关闭。F4 路径保留用于反序列化旧 proto / 调试。
+- **跨语言对齐**：TS 端 [src/vm/insncrypt.ts](file:///workspace/src/vm/insncrypt.ts) 与 Luau 端 [runtime/vm-runtime.template.lua](file:///workspace/runtime/vm-runtime.template.lua) 的 `rol32`/`ror32`/`f6_per_ip_params`/`f6_decrypt` 严格同源（纯算术实现，避开 Luau 按位运算符词法限制）。
+- **序列化格式扩展**：proto 末尾 `has_insn_seed` 之后新增 `insnCryptMode: uint8`；F6 模式额外写 8 字节 IV `(ivB8, ivB9)`。反序列化端检测 end-of-buffer 兼容旧 v0.6 proto（无 mode 字节 → 默认 F4）。
+
 ## 文件清单
 
 ### D4 平坦化
@@ -93,17 +110,46 @@ VM + 运行时模式 (--vm --runtime):
 - [x] [scripts/gen_raw_runtime.mjs](file:///workspace/scripts/gen_raw_runtime.mjs) — 生成含 transforms 的原始运行时（调试用）
 - [x] [scripts/gen_raw_notransform.mjs](file:///workspace/scripts/gen_raw_notransform.mjs) — 生成不含 transforms 的原始运行时（隔离 VM 问题用）
 
+### v0.11 F6 指令层加密
+- [x] [src/vm/insncrypt.ts](file:///workspace/src/vm/insncrypt.ts) — F6 核心实现：`rol32`/`ror32`/`perIpParams`/`f6Encrypt`/`f6Decrypt` + F4 兼容 `f4Keystream` + `genInsnIv`
+- [x] [src/vm/opcodes.ts](file:///workspace/src/vm/opcodes.ts) — `FuncPrototype` 新增 `insnCryptMode` (0=F4/1=F6) + `insnIv` (CBC IV) 字段
+- [x] [src/vm/encoder.ts](file:///workspace/src/vm/encoder.ts) — 序列化/反序列化支持 F6 模式（mode 字节 + IV），向后兼容 F4
+- [x] [src/vm/compiler.ts](file:///workspace/src/vm/compiler.ts) — `CompilerOptions.insnCrypt` ("f6"默认/"f4"/"off")，`finalize()` 生成 per-proto seed + IV
+- [x] [src/vm/pipeline.ts](file:///workspace/src/vm/pipeline.ts) — `compileVM`/`compileVMWithRuntime` 透传 `insnCrypt` 模式
+- [x] [src/pipeline/obfuscate.ts](file:///workspace/src/pipeline/obfuscate.ts) — `noInsnCrypt` 选项 → `insnCrypt: "off"`
+- [x] [src/cli/obfuscate.ts](file:///workspace/src/cli/obfuscate.ts) — `--no-insn-crypt` CLI 标志
+- [x] [runtime/vm-runtime.template.lua](file:///workspace/runtime/vm-runtime.template.lua) — Luau 端 `rol32`/`ror32`/`f6_per_ip_params`/`f6_decrypt` + `deserialize_proto` 模式分发
+- [x] [tests/insncrypt.test.ts](file:///workspace/tests/insncrypt.test.ts) — F6 全覆盖测试（56 个：rol32/ror32、往返、CBC tamper、splice 防御、Lua 公式对齐、encoder/compiler/pipeline 集成）
+
 ## 验证结果
 
 ```
 tsc --noEmit: zero errors
-npm test (vitest run): 70/70 passed
+npm test (vitest run): 200/200 passed
   - tests/lexer.test.ts: 4 passed
-  - tests/roundtrip.test.ts: 3 passed
+  - tests/roundtrip.test.ts: 8 passed
   - tests/parser.test.ts: 19 passed
   - tests/obfuscate.test.ts: 7 passed
   - tests/flatten.test.ts: 23 passed (6 buildIR + 3 shuffleArray + 10 flattenAST + 4 pipeline)
   - tests/deadcode.test.ts: 14 passed (determinism, probability, __d prefix, flatten integration)
+  - tests/flatten-v11.test.ts: 18 passed (递归 flatten + 不透明谓词 + 假路径 case)
+  - tests/flatten-semantic.test.ts: 11 passed (fengari 端到端语义等价)
+  - tests/runtime-template.test.ts: 4 passed (动态反 dump marker)
+  - tests/keyfuse.test.ts: 16 passed (512-bit keyfuse)
+  - tests/rtdeps.test.ts: 20 passed (rt_mix + runtime nibbles)
+  - tests/insncrypt.test.ts: 56 passed (F6 指令层加密全覆盖)
+
+v0.11 F6 验证 (tests/insncrypt.test.ts):
+  - rol32/ror32: 已知值 / 互逆 / 边界 / 高位回绕 ✓
+  - f6Encrypt→f6Decrypt 往返: 多 seed × 多 IV × 6 指令 ✓
+  - F6 vs F4: 相同输入产生不同密文 ✓
+  - CBC tamper propagation: 篡改 enc[i] 破坏 plain[i] + plain[i+1] ✓
+  - CBC splice-and-replay: 插入/删除指令 → 后续全部错位 ✓
+  - IV 敏感性 + seed 敏感性 + 确定性 ✓
+  - Lua f6_decrypt 公式与 TS f6Decrypt 输出完全一致（跨语言对齐）✓
+  - encoder F6 serialize/deserialize 往返（含子函数递归）✓
+  - compiler F6 默认 / F4 / off 三模式 + per-proto 独立 seed+IV ✓
+  - pipeline noInsnCrypt 透传 + F6 vs off hex 不同 ✓
 
 Luau 0.601 round-trip (基本模式, CJK strings, --seed 42):
   Input:  print("cn中国，，，。。。!-:（~）") + print("中文中文")
@@ -233,10 +279,22 @@ v0.8 多 VM E2E (e2e_test_input.lua, seeds 1/42/999/54321/88888):
 
 **修复**: 调试脚本中禁用 deadcode/flatten transforms 以隔离 VM 问题；VM dispatch 已覆盖所有 84 条语义。
 
+### v0.11 F6: Lua 词法作用域前向引用 (2025-07-31)
+
+**现象**: `deserialize_proto` 调用 `mulberry32` / `bxor32` / `f6_decrypt` 时报 nil value 错误。
+
+**根因**: Lua 的 `local function` 词法作用域要求声明在使用之前。F6 助手（`b32`/`bxor32`/`imul32`/`rol32`/`ror32`/`mulberry32`/`f6_per_ip_params`/`f6_decrypt`）原本定义在 `deserialize_proto` 之后，导致前向引用解析到 nil（global）。
+
+**修复**: 把所有位运算助手 + mulberry32 + F6 解密函数移到 `deserialize_proto` 之前定义。与 TS 端 `src/vm/insncrypt.ts` 严格对齐。
+
+**验证**: tests/insncrypt.test.ts 的 "Lua f6_decrypt 公式与 TS 对齐" 测试复刻 Lua 端公式，确保两端输出完全一致。
+
 ## 当前限制
 
 - VM 模式 + 运行时模式均已**完整实现**并验证通过。
 - v0.8 多 VM 交替执行已**完整实现**并验证通过（5 个种子 + 含/不含 transforms）。
+- v0.11 F6 指令层加密已**完整实现**并验证通过（56 个测试，含跨语言公式对齐）。
 - `^` (power) 操作码仍用 MUL_RR placeholder，运行时需额外处理。
 - 部分 fused opcodes（FUSED_CALL_LOADK_LEN_SUB 等）尚未在 compiler 中主动使用，但运行时 dispatch 已覆盖。
 - `Vararg` 表达式（`...`）目前为 MOVE placeholder。
+- F6 测试因沙箱无 luau 二进制，跨语言正确性通过 TS 复刻 Lua 公式（`luaF6Decrypt`）验证；生产环境需用 luau 跑 `--runtime` 输出做端到端确认。
