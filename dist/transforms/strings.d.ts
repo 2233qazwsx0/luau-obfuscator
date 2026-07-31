@@ -1,23 +1,21 @@
-import { type Token } from "../parser/tokens.js";
+/** 单条加密字符串的密钥长度（字节）。 */
+export declare const STRING_KEY_BYTES = 6;
 export interface StringCipher {
-    /** master key, encoded as uppercase hex (4 bytes = 8 hex chars). */
-    masterKeyHex: string;
-    /** per-string encrypted blobs as uppercase hex. */
+    /** 每条字符串的加密 blob + 独立 6 字节密钥。 */
     pool: {
         id: number;
         hex: string;
+        key: number[];
     }[];
 }
-/** Build the cipher metadata (master key + empty pool) seeded. */
-export declare function buildCipher(seed: number): StringCipher;
+/** 构造空 cipher（保留 seed 参数以便调用方记录，但不再派生全局主密钥）。 */
+export declare function buildCipher(_seed: number): StringCipher;
+/** 由 seed + strId 派生 6 字节独立密钥。 */
+export declare function deriveStringKey(seed: number, strId: number): number[];
 /**
- * Encrypt a single string `s` with `key` (4 bytes), return hex.
- * Mirrors the reference sample's `aT`/`aW` chain:
- *   cipher[i] = (plain[i] ^ key[(i + (i+1))%4]) & 0xff  (rotating + offset)
+ * 用 6 字节 key + LCG 滚动因子加密单个字符串，返回 hex。
+ * 与 emitter 内联的 Lua IIFE 完全对齐。
  */
-declare function encryptString(s: string, key: number[]): string;
-/** Apply encryption to all STRING tokens, accumulating into `cipher.pool`. */
-export declare function obfuscateStrings(tokens: Token[], cipher: StringCipher, seed: number): Token[];
-export { encryptString };
-/** Decrypt a single encrypted blob (for tests / decrypt). */
+export declare function encryptString(s: string, key: number[]): string;
+/** 解密单个 blob（与加密对称同形）。 */
 export declare function decryptString(hex: string, key: number[]): string;

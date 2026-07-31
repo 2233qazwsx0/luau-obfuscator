@@ -19,7 +19,8 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { genFakeBlob, DEFAULT_RUNTIME_PROTECT } from "./memory.js";
-import { genKeyfuseAssembly, KEYFUSE_KEY_HEX_LEN } from "./keyfuse.js";
+import { genKeyfuseAssembly, KEYFUSE_KEY_HEX_LEN, computeKeyfuseKhSize } from "./keyfuse.js";
+import { deriveRtToken } from "./rtdeps.js";
 const TEMPLATE_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../../runtime/vm-runtime.template.lua");
 /** 从模板里剥离一对 marker 之间的内容（含 marker 行本身）。 */
 function stripRegion(src, begin, end) {
@@ -151,32 +152,64 @@ export function buildRuntime(hex, cipherKey, opts = DEFAULT_RUNTIME_PROTECT, vmS
         template = stripMarkers(template, "__MEMWIPE_BEGIN__", "__MEMWIPE_END__");
     }
     // 2. 反 dump 区段：禁用时剥离 helper 定义 + boot 检测，启用时只去 marker。
+    //    v0.10 动态检测（dynamicAntidump）：3 项新检查 + 周期性 vm_execute 内调用。
+    //    antidump 关 → 剥离所有反 dump 区段（含动态子区段 + vm_execute 内调用点）。
+    //    antidump 开 / dynamic 关 → 保留静态检查，剥离动态子区段（3 项新检查 + helper + runtime 调用）。
+    //    antidump 开 / dynamic 开 → 全保留，只去 marker。
+    const dynamicAntidump = opts.dynamicAntidump !== false;
     if (!antidump) {
         template = stripRegion(template, "__ANTIDUMP_HELPERS_BEGIN__", "__ANTIDUMP_HELPERS_END__");
         template = stripRegion(template, "__ANTIDUMP_BOOT_BEGIN__", "__ANTIDUMP_BOOT_END__");
+        template = stripRegion(template, "__ANTIDUMP_DYNAMIC_RUNTIME_BEGIN__", "__ANTIDUMP_DYNAMIC_RUNTIME_END__");
     }
     else {
         template = stripMarkers(template, "__ANTIDUMP_HELPERS_BEGIN__", "__ANTIDUMP_HELPERS_END__");
         template = stripMarkers(template, "__ANTIDUMP_BOOT_BEGIN__", "__ANTIDUMP_BOOT_END__");
+        if (!dynamicAntidump) {
+            // 剥离动态子区段：3 项新检查（在 anti_dump_check 内）+ anti_dump_dynamic 函数 + vm_execute 内调用。
+            template = stripRegion(template, "__ANTIDUMP_DYNAMIC_CHECKS_BEGIN__", "__ANTIDUMP_DYNAMIC_CHECKS_END__");
+            template = stripRegion(template, "__ANTIDUMP_DYNAMIC_HELPER_BEGIN__", "__ANTIDUMP_DYNAMIC_HELPER_END__");
+            template = stripRegion(template, "__ANTIDUMP_DYNAMIC_RUNTIME_BEGIN__", "__ANTIDUMP_DYNAMIC_RUNTIME_END__");
+        }
+        else {
+            template = stripMarkers(template, "__ANTIDUMP_DYNAMIC_CHECKS_BEGIN__", "__ANTIDUMP_DYNAMIC_CHECKS_END__");
+            template = stripMarkers(template, "__ANTIDUMP_DYNAMIC_HELPER_BEGIN__", "__ANTIDUMP_DYNAMIC_HELPER_END__");
+            template = stripMarkers(template, "__ANTIDUMP_DYNAMIC_RUNTIME_BEGIN__", "__ANTIDUMP_DYNAMIC_RUNTIME_END__");
+        }
     }
-    // 3. v0.9 keyfuse 区段处理（必须在 vm_boot 引用前完成）。
-    //    a) xor_bytes_512 helper：keyfuse 关闭时剥离，开启时去 marker。
-    //    b) __KEYFUSE_REAL__（早期段，真实融合宿主定义）：开启时替换为 realFusedCode，关闭时剥离。
-    //    c) __KEYFUSE__（晚期段，装配 dispatch loop）：开启时替换为 assemblyCode，关闭时剥离。
-    //    d) __KEYFUSE_XOR_STEP__（vm_boot 内 XOR 解密步）：关闭时剥离，开启时去 marker。
-    //    e) __KEYFUSE_MEMWIPE__（vm_boot 内 secure_nil(KEY)）：关闭时剥离，开启时去 marker。
-    //    f) __KF_JUNK1__/__KF_JUNK2__（假 VM 分支 junk 魔数）：开启→_rf1/_rf2，关闭→原始字面量。
+    // 3. v0.9 keyfuse + v0.10 rt_deps 区段处理（必须在 vm_boot 引用前完成）。
+    //    keyfuse:  a) xor_bytes_512 helper  b) __KEYFUSE_REAL__  c) __KEYFUSE__ (dispatch loop)
+    //              d) __KEYFUSE_XOR_STEP__  e) __KEYFUSE_MEMWIPE__  f) __KF_JUNK1__/2__
+    //    rt_deps:  g) __RT_MIX_HELPERS__ (rt_mix_decrypt 函数)
+    //              h) __RT_MIX_STEP__ (vm_boot 内 rt_mix_decrypt 调用)
+    //              i) __RT_MIX_MEMWIPE__ (vm_boot 内 secure_nil(_rt_tok))
+    //              + keyfuse dispatch loop 的 nibbles 126/127 改由 _rt_tok 派生。
+    //    rt_deps 依赖 keyfuse：keyfuse 关时 rt_deps 一并关闭。
+    const rtDeps = opts.rtDeps !== false && keyfuse;
     if (keyfuse) {
         template = stripMarkers(template, "__KEYFUSE_HELPERS_BEGIN__", "__KEYFUSE_HELPERS_END__");
         template = stripMarkers(template, "__KEYFUSE_XOR_STEP_BEGIN__", "__KEYFUSE_XOR_STEP_END__");
         template = stripMarkers(template, "__KEYFUSE_MEMWIPE_BEGIN__", "__KEYFUSE_MEMWIPE_END__");
-        // 生成 keyfuse 装配代码（真实融合宿主 + dispatch loop）。
-        const kf = genKeyfuseAssembly(keyHex, vmSeed >>> 0);
+        // v0.10 rt_deps：从 hex 长度 + _kh 大小派生 token（与 pipeline 侧一致）。
+        const rtToken = rtDeps ? deriveRtToken(hex.length, computeKeyfuseKhSize()) : null;
+        // 生成 keyfuse 装配代码（rtToken 非 null 时 nibbles 126/127 运行时派生）。
+        const kf = genKeyfuseAssembly(keyHex, vmSeed >>> 0, 0.35, rtToken);
         template = replaceRegion(template, "__KEYFUSE_REAL_BEGIN__", "__KEYFUSE_REAL_END__", kf.realFusedCode);
         template = replaceRegion(template, "__KEYFUSE_BEGIN__", "__KEYFUSE_END__", kf.assemblyCode);
         // 假 VM 分支 junk 魔数 → 真实融合宿主引用。
         template = template.replace(/__KF_JUNK1__/g, "_rf1");
         template = template.replace(/__KF_JUNK2__/g, "_rf2");
+        // rt_mix markers：rt_deps 开时去 marker，关时剥离整段。
+        if (rtDeps) {
+            template = stripMarkers(template, "__RT_MIX_HELPERS_BEGIN__", "__RT_MIX_HELPERS_END__");
+            template = stripMarkers(template, "__RT_MIX_STEP_BEGIN__", "__RT_MIX_STEP_END__");
+            template = stripMarkers(template, "__RT_MIX_MEMWIPE_BEGIN__", "__RT_MIX_MEMWIPE_END__");
+        }
+        else {
+            template = stripRegion(template, "__RT_MIX_HELPERS_BEGIN__", "__RT_MIX_HELPERS_END__");
+            template = stripRegion(template, "__RT_MIX_STEP_BEGIN__", "__RT_MIX_STEP_END__");
+            template = stripRegion(template, "__RT_MIX_MEMWIPE_BEGIN__", "__RT_MIX_MEMWIPE_END__");
+        }
     }
     else {
         template = stripRegion(template, "__KEYFUSE_HELPERS_BEGIN__", "__KEYFUSE_HELPERS_END__");
@@ -184,28 +217,34 @@ export function buildRuntime(hex, cipherKey, opts = DEFAULT_RUNTIME_PROTECT, vmS
         template = stripRegion(template, "__KEYFUSE_BEGIN__", "__KEYFUSE_END__");
         template = stripRegion(template, "__KEYFUSE_XOR_STEP_BEGIN__", "__KEYFUSE_XOR_STEP_END__");
         template = stripRegion(template, "__KEYFUSE_MEMWIPE_BEGIN__", "__KEYFUSE_MEMWIPE_END__");
+        // keyfuse 关 → rt_deps 一并剥离。
+        template = stripRegion(template, "__RT_MIX_HELPERS_BEGIN__", "__RT_MIX_HELPERS_END__");
+        template = stripRegion(template, "__RT_MIX_STEP_BEGIN__", "__RT_MIX_STEP_END__");
+        template = stripRegion(template, "__RT_MIX_MEMWIPE_BEGIN__", "__RT_MIX_MEMWIPE_END__");
         // 假 VM 分支 junk 魔数 → 原始字面量（与未融合行为一致）。
         template = template.replace(/__KF_JUNK1__/g, "1315423911");
         template = template.replace(/__KF_JUNK2__/g, "2654435761");
     }
     // 4. hex blob 定义区段：碎片化或单串替换。
+    //    FAKE_BLOB 仅在 antidump 开启时声明（antidump 关闭时其唯一引用点
+    //    __ANTIDUMP_BOOT__ 已被剥离，声明即为死代码，不生成）。
     const fakeBlob = antidump ? genFakeBlob(hex.length, cipherKey ^ 0xFEEDFACE) : "";
     const fragSeed = (cipherKey ^ 0x7017CAFE) >>> 0;
     let blobDefs;
     if (frag) {
-        // v0.7 碎片化：HEX_BLOB 总是碎片化；FAKE_BLOB 仅在 antidump 开启时碎片化，
-        // 否则空串（antidump 关闭时 FAKE_BLOB 不会被引用，碎片化无意义）。
+        // v0.7 碎片化：HEX_BLOB 总是碎片化；FAKE_BLOB 仅在 antidump 开启时碎片化。
         const hexAsm = genFragmentedAssembly("HEX_BLOB", hex, fragSeed);
         const fakeAsm = antidump
             ? genFragmentedAssembly("FAKE_BLOB", fakeBlob, (fragSeed ^ 0xAA55) >>> 0)
-            : `local FAKE_BLOB = ""`;
-        blobDefs = `${hexAsm}\n${fakeAsm}`;
+            : "";
+        blobDefs = fakeAsm ? `${hexAsm}\n${fakeAsm}` : hexAsm;
     }
     else {
         // 单串模式（原 v0.4 行为）。
-        blobDefs =
-            `local HEX_BLOB = ${JSON.stringify(hex)}\n` +
-                `local FAKE_BLOB = ${JSON.stringify(fakeBlob)}`;
+        blobDefs = antidump
+            ? `local HEX_BLOB = ${JSON.stringify(hex)}\n` +
+                `local FAKE_BLOB = ${JSON.stringify(fakeBlob)}`
+            : `local HEX_BLOB = ${JSON.stringify(hex)}`;
     }
     // 替换整个 __BLOB_DEFS__ 区段（含 marker）为生成的代码。
     const blobRe = new RegExp(`[^\\n]*--\\[\\[__BLOB_DEFS_BEGIN__\\]\\][\\s\\S]*?--\\[\\[__BLOB_DEFS_END__\\]\\][^\\n]*\\n?`, "g");

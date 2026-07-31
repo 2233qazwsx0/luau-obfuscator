@@ -6,7 +6,7 @@
 import { lex } from "../parser/lexer.js";
 import { parse } from "../parser/parser.js";
 import { emit } from "../emit/emitter.js";
-import { buildCipher } from "../transforms/strings.js";
+import { buildCipher, deriveStringKey, encryptString } from "../transforms/strings.js";
 import { renameIdentifiers } from "../transforms/identifier.js";
 import { mulberry32, randInt } from "../util/prng.js";
 import { flattenAST, flattenRecursive } from "../ir/flatten.js";
@@ -73,6 +73,8 @@ export function runPipeline(src, opts = {}) {
                 antidump: !opts.noAntidump,
                 frag: !opts.noFrag,
                 keyfuse: !opts.noKeyfuse,
+                dynamicAntidump: !opts.noDynamicAntidump,
+                rtDeps: !opts.noRtDeps,
             };
             const runtimeSrc = compileVMWithRuntime(ast, seed, rtOpts);
             // Self-obfuscate the runtime template through the D1-D3 pipeline only.
@@ -118,8 +120,9 @@ export function runPipeline(src, opts = {}) {
             return n;
         });
     }
-    // 5. String encryption: walk AST, replace String nodes with __STR__ placeholders
-    //    and accumulate into cipher.pool.
+    // 5. String encryption: walk AST, encrypt each String node with an independent
+    //    6-byte key + LCG rolling factor (v0.10). Key is attached to node meta so
+    //    the emitter can inline it without consulting the cipher pool.
     if (!opts.noStrings) {
         ast = walk(ast, (n) => {
             if (n.t === "String" && n.value.length > 0) {
@@ -132,23 +135,22 @@ export function runPipeline(src, opts = {}) {
                 // @ts-expect-error - meta channel
                 if (n.__str_hex)
                     return n;
-                const keyBytes = Buffer.from(cipher.masterKeyHex, "hex");
-                const buf = Buffer.from(n.value, "utf8");
-                for (let i = 0; i < buf.length; i++) {
-                    buf[i] = (buf[i] ^ (keyBytes[(i + 1) % 4] + i)) & 0xff;
-                }
-                const blob = buf.toString("hex").toUpperCase();
-                cipher.pool.push({ id: cipher.pool.length, hex: blob });
+                const strId = cipher.pool.length;
+                const key = deriveStringKey(seed, strId);
+                const blob = encryptString(n.value, key);
+                cipher.pool.push({ id: strId, hex: blob, key });
                 // @ts-expect-error
                 n.__str_hex = blob;
                 // @ts-expect-error
-                n.__str_id = cipher.pool.length - 1;
+                n.__str_id = strId;
+                // @ts-expect-error
+                n.__str_key = key;
             }
             return n;
         });
     }
     // 6. Emit
-    let out = emit(ast, cipher);
+    let out = emit(ast);
     // 7. Minify (optional)
     if (opts.minify) {
         out = out.split("\n").filter((l) => l.trim() !== "").join(" ");

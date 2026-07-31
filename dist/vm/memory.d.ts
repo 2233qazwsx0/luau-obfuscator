@@ -8,6 +8,10 @@ export interface RuntimeProtectOptions {
     frag?: boolean;
     /** 启用 512 位密钥深度融合（v0.9 keyfuse）：XOR 外层 + 碎片宿主 + 乱序装配。 */
     keyfuse?: boolean;
+    /** v0.10 动态反调试：时间差 + debug hook 完整性 + 环境干净性 + vm_execute 周期性检查。 */
+    dynamicAntidump?: boolean;
+    /** v0.10 rt_deps：解密链插入运行时依赖层 + keyfuse 2 nibble 运行时派生。需 keyfuse 开启。 */
+    rtDeps?: boolean;
 }
 /** 默认全开。 */
 export declare const DEFAULT_RUNTIME_PROTECT: RuntimeProtectOptions;

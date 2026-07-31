@@ -12,6 +12,10 @@
 // 拼接索引通过 _B()（bitxor polyfill）动态计算，装配顺序由 seed 派生的
 // Fisher-Yates 打乱。攻击者需完整逆向状态机才能还原碎片顺序。
 //
+// v0.10 rt_deps：当 rtToken != null 时，nibbles 126/127 不写入 _kh（填诱饵值），
+// 改由 dispatch loop 从 _rt_tok（运行时 token）派生。token 依赖 #HEX_BLOB / #_kh，
+// 两者只在碎片装配 + keyfuse 建表后才知道 → 至少一部分密钥片段必须运行时才能获得。
+//
 // 记住我们面向的是 luau，加密后的也是 luau。
 
 /** mulberry32 PRNG（内联，与 src/util/prng.ts 对齐）。 */
@@ -30,6 +34,16 @@ function mulberry32(seed: number): () => number {
 export const KEYFUSE_KEY_BYTES = 64;
 export const KEYFUSE_KEY_HEX_LEN = KEYFUSE_KEY_BYTES * 2; // 128
 export const KEYFUSE_NIBBLES = KEYFUSE_KEY_HEX_LEN; // 128
+
+/**
+ * 计算 _kh 宿主表的大小（128 真 + decoyCount 假）。
+ * 仅依赖 decoyRate（默认 0.35），不依赖 seed / rtToken。
+ * pipeline 用此值在打包前算出 rtToken（#_kh 项）。
+ */
+export function computeKeyfuseKhSize(decoyRate: number = 0.35): number {
+  const decoyCount = Math.max(4, Math.floor(KEYFUSE_NIBBLES * decoyRate));
+  return KEYFUSE_NIBBLES + decoyCount;
+}
 
 /**
  * 从 seed 派生 512 位（64 字节）XOR 密钥。确定性：同 seed 同密钥。
@@ -116,11 +130,14 @@ function makeSyntheticHost(
  * @param keyHex    128 hex 字符的 512 位密钥
  * @param seed      PRNG 种子（决定打乱顺序、宿主值、state ID）
  * @param decoyRate 假碎片比例（0.2-0.5）。默认 0.35。
+ * @param rtToken   v0.10 rt_deps：非 null 时 nibbles 126/127 改由运行时 token 派生。
+ *                  _kh 对应槽填诱饵值，dispatch loop 从 _rt_tok 读取真实 nibble。
  */
 export function genKeyfuseAssembly(
   keyHex: string,
   seed: number,
   decoyRate: number = 0.35,
+  rtToken: number | null = null,
 ): {
   realFusedCode: string;
   assemblyCode: string;
@@ -135,6 +152,13 @@ export function genKeyfuseAssembly(
   const nibbles: number[] = [];
   for (let i = 0; i < KEYFUSE_NIBBLES; i++) {
     nibbles.push(parseInt(keyHex[i]!, 16));
+  }
+  // v0.10 rt_deps：nibbles 126/127 改由 _rt_tok 派生，_kh 槽填诱饵。
+  // keyHex/keyBytes 已在 pipeline 中用 rtToken 覆盖了这两位，这里只影响 _kh 表内容。
+  const rtActive = rtToken != null;
+  if (rtActive) {
+    nibbles[126] = Math.floor(rand() * 16); // 诱饵
+    nibbles[127] = Math.floor(rand() * 16); // 诱饵
   }
 
   // ---- 1. 构建宿主集合 ----
@@ -256,6 +280,13 @@ export function genKeyfuseAssembly(
   }
   lines.push(`}`);
   lines.push(`local _kk = ${kk}`);
+  // v0.10 rt_deps：派生运行时 token（依赖 #HEX_BLOB / #_kh，两者在此刻才已知）。
+  // nibbles 126/127 由 _rt_tok 派生，而非 _kh 静态值。
+  if (rtActive) {
+    lines.push(
+      `local _rt_tok = (#HEX_BLOB * 2654435761 + #_kh * 16777619 + 0x5F051701) % 4294967296`,
+    );
+  }
   lines.push(`local KEY = ""`);
   lines.push(`local __kf_b = ${stateIds[0]}`);
   lines.push(`while true do`);
@@ -271,10 +302,19 @@ export function genKeyfuseAssembly(
       const branchKw = firstCase ? "if" : "elseif";
       firstCase = false;
       lines.push(`  ${branchKw} __kf_b == ${sid} then`);
-      // _B(i, _kk) + 1 → 槽位；% 16 → nibble；string.format("%X", ...) → hex 字符。
-      lines.push(
-        `    KEY = KEY .. string.format("%X", _kh[_B(${i}, _kk) + 1] % 16)`,
-      );
+      // v0.10 rt_deps：nibbles 126/127 从 _rt_tok 派生，不走 _kh。
+      if (rtActive && (i === 126 || i === 127)) {
+        // (token >>> 4) & 0xF → nibble 126；(token >>> 8) & 0xF → nibble 127。
+        const shift = i === 126 ? 4 : 8;
+        lines.push(
+          `    KEY = KEY .. string.format("%X", math.floor(_rt_tok / ${1 << shift}) % 16)`,
+        );
+      } else {
+        // _B(i, _kk) + 1 → 槽位；% 16 → nibble；string.format("%X", ...) → hex 字符。
+        lines.push(
+          `    KEY = KEY .. string.format("%X", _kh[_B(${i}, _kk) + 1] % 16)`,
+        );
+      }
       lines.push(`    __kf_b = ${nextSid}`);
     } else if (caseIdx < totalCases) {
       // 死分支 case：结构与真实 case 完全相同，但访问假碎片槽（垃圾 nibble）。
@@ -303,6 +343,8 @@ export function genKeyfuseAssembly(
   lines.push(`  end`);
   lines.push(`end`);
   // 清理：用完即毁（配合 vm_boot 内 secure_nil(KEY)）。
+  // 注意：_rt_tok 不在此处销毁——vm_boot 的 rt_mix_decrypt 仍需引用，
+  // 由 vm_boot 内 __RT_MIX_MEMWIPE__ 段负责 secure_nil。
   lines.push(`_kh = nil`);
   lines.push(`_kk = nil`);
   lines.push(`__kf_b = nil`);

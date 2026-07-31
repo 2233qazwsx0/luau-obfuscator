@@ -41,7 +41,7 @@ end
 --[[__MEMWIPE_END__]]
 
 --[[__ANTIDUMP_HELPERS_BEGIN__]]
--- ---- v0.5 反 dump 环境检测 ----
+-- ---- v0.5 反 dump 环境检测 + v0.10 动态检测 ----
 -- 返回 true 表示疑似调试/dump/exploit 环境，应使用假数据诱饵。
 -- 设计原则：误杀优先于漏杀 —— 正常 Luau/Roblox 环境绝不触发。
 -- 只检测明确的 exploit/dump 工具特征，不因 debug/getfenv 存在就触发。
@@ -79,8 +79,87 @@ local function anti_dump_check()
   end)
   if detected then return true end
 
+  --[[__ANTIDUMP_DYNAMIC_CHECKS_BEGIN__]]
+  -- v0.10 动态检测（3 项）：时间差 / debug hook 完整性 / 环境干净性。
+  -- 任一命中即视为被调试，走 FAKE_BLOB 假路径。
+  -- 3a) 时间差检测：测量 os.clock() 在固定计算循环上的耗时。
+  --     正常环境 << 0.5s；调试器单步插桩会显著拉长。os.clock 不可用时跳过。
+  pcall(function()
+    if type(os) == "table" and type(os.clock) == "function" then
+      local t0 = os.clock()
+      local acc = 0
+      for i = 1, 2000 do acc = acc + i end
+      local dt = os.clock() - t0
+      if dt > 0.5 then detected = true end
+    end
+  end)
+  if detected then return true end
+
+  -- 3b) debug hook 完整性：gethook/sethook 必须都是 function 且 gethook() == nil。
+  --     调试器替换 debug 表或设置 hook 都会触发。
+  pcall(function()
+    if type(debug) ~= "table"
+      or type(debug.gethook) ~= "function"
+      or type(debug.sethook) ~= "function"
+    then
+      detected = true
+    else
+      local h1 = debug.gethook()
+      local h2 = debug.gethook()
+      if h1 ~= nil or h2 ~= nil or h1 ~= h2 then detected = true end
+    end
+  end)
+  if detected then return true end
+
+  -- 3c) 环境干净性：getfenv(0) 必须是 table，标准库 (string/math/pairs) 必须存在。
+  --     代理/沙箱替换 _G 会破坏这些不变量。
+  pcall(function()
+    local g = getfenv and getfenv(0) or _G
+    if type(g) ~= "table"
+      or type(g.string) ~= "table"
+      or type(g.math) ~= "table"
+      or type(g.pairs) ~= "function"
+    then
+      detected = true
+    end
+  end)
+  if detected then return true end
+  --[[__ANTIDUMP_DYNAMIC_CHECKS_END__]]
+
   return false
 end
+
+-- v0.10 周期性轻量检测：在 vm_execute 主循环每 N 条指令调用一次。
+-- 只做廉价的 hook 完整性 + 环境干净性检查（跳过耗时的时间差检测）。
+-- 命中即 error() 崩溃（执行中无法替换 blob，直接终止防泄漏）。
+--[[__ANTIDUMP_DYNAMIC_HELPER_BEGIN__]]
+local function anti_dump_dynamic()
+  local detected = false
+  pcall(function()
+    if type(debug) ~= "table"
+      or type(debug.gethook) ~= "function"
+      or type(debug.sethook) ~= "function"
+    then
+      detected = true
+    else
+      if debug.gethook() ~= nil then detected = true end
+    end
+  end)
+  if not detected then
+    pcall(function()
+      local g = getfenv and getfenv(0) or _G
+      if type(g) ~= "table"
+        or type(g.string) ~= "table"
+        or type(g.math) ~= "table"
+        or type(g.pairs) ~= "function"
+      then
+        detected = true
+      end
+    end)
+  end
+  return detected
+end
+--[[__ANTIDUMP_DYNAMIC_HELPER_END__]]
 --[[__ANTIDUMP_HELPERS_END__]]
 
 -- Extract `width` bits from `value` starting at 1-indexed bit `start`.
@@ -540,6 +619,25 @@ local function xor_bytes_512(data, keyHex)
 end
 --[[__KEYFUSE_HELPERS_END__]]
 
+--[[__RT_MIX_HELPERS_BEGIN__]]
+-- v0.10 rt_deps: position-dependent ADD/SUB 层（解密链最外层）。
+-- 密钥流 (token + i*31 + 7) % 256 与 stream cipher (key + i + 1) % 256 不同公式，
+-- 不可折叠。token 由 #HEX_BLOB / #_kh 派生（运行时才知道），纯静态模拟无法还原。
+-- 与 src/vm/rtdeps.ts rtMixDecrypt 完全对齐。
+local function rt_mix_decrypt(data, token)
+  local len = #data
+  local out = {}
+  for i = 1, len do
+    local k = (token + i * 31 + 7) % 256
+    local b = string.byte(data, i)
+    local p = b - k
+    if p < 0 then p = p + 256 end
+    out[i] = string.char(p)
+  end
+  return table.concat(out)
+end
+--[[__RT_MIX_HELPERS_END__]]
+
 -- 返回常量 i（1-indexed），首次访问时若存在 blind_desc 则解密并缓存。
 -- proto.constants[i] == nil 表示首次访问（已盲化）。
 local function make_const_access(proto)
@@ -632,7 +730,19 @@ function vm_execute(proto, env, upvals, args)
     end
   end
 
+  --[[__ANTIDUMP_DYNAMIC_RUNTIME_BEGIN__]]
+  -- v0.10 周期性反调试：每 N 条指令调用 anti_dump_dynamic()，命中即 error() 崩溃。
+  local __ad_cnt = 0
+  --[[__ANTIDUMP_DYNAMIC_RUNTIME_END__]]
+
   while ip <= ncode do
+    --[[__ANTIDUMP_DYNAMIC_RUNTIME_BEGIN__]]
+    __ad_cnt = __ad_cnt + 1
+    if __ad_cnt >= 4096 then
+      __ad_cnt = 0
+      if anti_dump_dynamic() then error("__ad") end
+    end
+    --[[__ANTIDUMP_DYNAMIC_RUNTIME_END__]]
     -- v0.6 F5：假 VM 分支 → 写入高寄存器(200..255)惰性垃圾并立即退回最近真VM。
     -- 真执行永远不会走这里；假 VM 只在不透明谓词的永假分支里 SWITCH_VM 到。
     if current_vm == 3 or current_vm == 4 then
@@ -887,10 +997,15 @@ local function vm_boot()
   local cipher_data = hex_to_bytes(blob)
   -- keyfuse 关闭时 dec_input = cipher_data；开启时先做 512 位 XOR 解密。
   local dec_input = cipher_data
+  --[[__RT_MIX_STEP_BEGIN__]]
+  -- v0.10 rt_deps: rt_mix 解密层（最外层）。token 来自 keyfuse 装配段的 _rt_tok。
+  -- 必须在 xor_bytes_512 之前执行（加密顺序：xor512 → rt_mix，解密逆序）。
+  dec_input = rt_mix_decrypt(dec_input, _rt_tok)
+  --[[__RT_MIX_STEP_END__]]
   --[[__KEYFUSE_XOR_STEP_BEGIN__]]
   -- v0.9 keyfuse: 512 位 XOR 外层解密。KEY 由晚期装配段生成（128 hex 字符）。
   -- 解密后立即销毁 KEY，完整密钥在内存中存活时间极短。
-  dec_input = xor_bytes_512(cipher_data, KEY)
+  dec_input = xor_bytes_512(dec_input, KEY)
   --[[__KEYFUSE_XOR_STEP_END__]]
   local decrypted = stream_decrypt(dec_input, CIPHER_KEY)
   local serialized = lzw_decode(decrypted)
@@ -920,6 +1035,9 @@ local function vm_boot()
   --[[__KEYFUSE_MEMWIPE_BEGIN__]]
   secure_nil(KEY)
   --[[__KEYFUSE_MEMWIPE_END__]]
+  --[[__RT_MIX_MEMWIPE_BEGIN__]]
+  secure_nil(_rt_tok)
+  --[[__RT_MIX_MEMWIPE_END__]]
   gc_trigger()
   --[[__MEMWIPE_END__]]
 

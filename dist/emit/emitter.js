@@ -1,11 +1,12 @@
 // src/emit/emitter.ts — Render the AST back into Luau source.
 //
 // Important: the AST nodes carry a `meta` field written by the transforms
-// pipeline (number-key on `Number` nodes, replacement blob on `String`).
-// We honor those during emission so the obfuscated form comes out correctly.
+// pipeline (number-key on `Number` nodes, replacement blob + per-string key
+// on `String`). We honor those during emission so the obfuscated form comes
+// out correctly.
 import { BIT32_POLYFILL } from "./bit32_polyfill.js";
-export function emit(program, cipher) {
-    const ctx = { indent: 0, out: [BIT32_POLYFILL], cipher };
+export function emit(program) {
+    const ctx = { indent: 0, out: [BIT32_POLYFILL] };
     emitNode(ctx, program);
     return ctx.out.join("\n");
 }
@@ -165,11 +166,12 @@ function exprToLuau(ctx, e) {
             // @ts-expect-error — meta channel for string obfuscation
             const blob = e.__str_hex;
             // @ts-expect-error
-            const id = e.__str_id;
-            if (blob && id !== undefined) {
-                const keyBytes = Array.from(Buffer.from(ctx.cipher.masterKeyHex, "hex"));
-                const keyLit = `{${keyBytes.join(",")}}`;
-                return `((function(K) return function(H) local O="";for i=1,#H,2 do local j=(i+1)/2-1;O=O..string.char((_B(tonumber(H:sub(i,i+1),16),(K[(j+1)%4+1]+j))%256)) end;return O end end)(${keyLit}))("${blob}")`;
+            const key = e.__str_key;
+            if (blob && key) {
+                const keyLit = `{${key.join(",")}}`;
+                // v0.10: 6-byte key + LCG rolling factor. R seeded from K[1]^K[6];
+                // each byte: hex ^ ((K[(j%6)+1]+j)%256) ^ (R%256); R = LCG step.
+                return `((function(K) return function(H) local O="" local R=_B(K[1],K[6]) for i=1,#H,2 do local j=(i+1)/2-1 O=O..string.char((_B(_B(tonumber(H:sub(i,i+1),16),((K[(j%6)+1]+j)%256)),(R%256)))%256) R=(R*1664525+1013904223)%4294967296 end;return O end end)(${keyLit}))("${blob}")`;
             }
             return JSON.stringify(e.value);
         }
@@ -197,7 +199,7 @@ function exprToLuau(ctx, e) {
                 return tp ? `${p}: ${tp}` : p;
             }).join(", ");
             const retStr = e.retType ? `: ${e.retType}` : "";
-            const bodyCtx = { indent: ctx.indent + 1, out: [], cipher: ctx.cipher };
+            const bodyCtx = { indent: ctx.indent + 1, out: [] };
             emitNode(bodyCtx, e.body);
             const bodyStr = bodyCtx.out.join("\n");
             const indentedBody = bodyStr.split("\n").map(l => l.length > 0 ? "    ".repeat(bodyCtx.indent > 0 ? bodyCtx.indent : ctx.indent + 1) + l : l).join("\n");

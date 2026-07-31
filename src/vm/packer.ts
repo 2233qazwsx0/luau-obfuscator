@@ -12,6 +12,8 @@
 // At runtime, the Luau interpreter reverses this:
 //   hex string → XOR decrypt → LZW decompress → bytecode string → b3() decoder
 
+import { rtMixEncrypt } from "./rtdeps.js";
+
 // ---- LZW Compression ----
 // Mirrors the reference's N(O) decoder in reverse.
 // The reference's LZW uses base-36 encoding for dictionary indices,
@@ -255,6 +257,35 @@ export function packBytecode(serializedFunc: string, key: number, useLZW: boolea
 
   // Step 3: Hex encode for embedding
   return bytesToHex(data);
+}
+
+/**
+ * Pack to the xor512 stage (LZW + stream + xor512), WITHOUT hex encoding.
+ * v0.10 rt_deps：pipeline 用此函数获取中间二进制串，从中算出 hexLen → rtToken，
+ * 再用 packRtMixHex() 追加 rt_mix 层。xor512 / rt_mix 均保长，hexLen 不依赖 KEY。
+ *
+ * @returns xor512 后的二进制串（尚未 hex 编码）
+ */
+export function packToXor512Stage(
+  serializedFunc: string,
+  key: number,
+  keyBytes: number[],
+  useLZW: boolean = true,
+): string {
+  let data = serializedFunc;
+  if (useLZW) data = lzwCompress(data);
+  data = streamEncrypt(data, key);
+  data = xor512Outer(data, keyBytes);
+  return data;
+}
+
+/**
+ * 在 xor512 二进制串上追加 rt_mix 层 + hex 编码（v0.10 Feature 4）。
+ * 运行时逆向：hex → hex_to_bytes → rt_mix_decrypt → xor_bytes_512 → stream_decrypt → lzw。
+ */
+export function packRtMixHex(xorData: string, rtToken: number): string {
+  const rtData = rtMixEncrypt(xorData, rtToken);
+  return bytesToHex(rtData);
 }
 
 /**

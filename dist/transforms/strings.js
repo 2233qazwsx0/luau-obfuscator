@@ -1,80 +1,65 @@
-// src/transforms/strings.ts — D3: XOR string encryption.
+// src/transforms/strings.ts — D3: per-string XOR encryption with rolling factor.
 //
-// For each STRING token we either:
-//   (a) emit `a[28](a[27], "HEX")` where a[27] is the master key (single
-//       4-byte hex) and a[28] is a fixed XOR decoder (same as sample).
-//   (b) When the string is short and may be a Lua keyword candidate we keep
-//       it raw to avoid decode-time perf hazards.
+// v0.10 升级：废除全局共享 4 字节主密钥，每条字符串使用独立 6 字节密钥，
+// 并在解密公式中加入 LCG 滚动因子，避免单一可识别模式。
 //
-// We do NOT actually LZW-compress here — that's a stretch goal in TODO.md.
-// The byte-level XOR with a 4-byte rotating key is already very hard to grep.
-import { TokenKind } from "../parser/tokens.js";
-import { mulberry32, randBytes } from "../util/prng.js";
-/** Build the cipher metadata (master key + empty pool) seeded. */
-export function buildCipher(seed) {
-    const rng = mulberry32(seed ^ 0x6d2b79f5);
-    const key = randBytes(rng, 4);
-    const masterKeyHex = Buffer.from(key).toString("hex").toUpperCase().padStart(8, "0");
-    return { masterKeyHex, pool: [] };
+// 加密公式（TS 端，i 为 0-based 字节序号）：
+//   R_0   = key[0] ^ key[5]                         (8-bit 初值)
+//   R_{n+1} = (R_n * 1664525 + 1013904223) >>> 0    (LCG, 32-bit 状态)
+//   cipher[i] = (plain[i] ^ ((key[i % 6] + i) & 0xff) ^ (R & 0xff)) & 0xff
+//   R = R_{i+1}
+//
+// Lua 端解密镜像（emitter 内联 IIFE）：
+//   local R = _B(K[1], K[6])
+//   for j = 0, len-1 do
+//     O = O .. string.char((_B(_B(hex_byte, (K[(j%6)+1]+j)%256), R%256)) % 256)
+//     R = (R * 1664525 + 1013904223) % 4294967296
+//   end
+//
+// 每条字符串独立密钥 → 攻破一条不泄露其他；LCG 滚动 → 单字节模式不可识别。
+import { mulberry32 } from "../util/prng.js";
+/** 单条加密字符串的密钥长度（字节）。 */
+export const STRING_KEY_BYTES = 6;
+/** 构造空 cipher（保留 seed 参数以便调用方记录，但不再派生全局主密钥）。 */
+export function buildCipher(_seed) {
+    return { pool: [] };
+}
+/** 由 seed + strId 派生 6 字节独立密钥。 */
+export function deriveStringKey(seed, strId) {
+    const rng = mulberry32((seed ^ 0x51571425 ^ Math.imul(strId + 1, 0x9E3779B1)) >>> 0);
+    const key = [];
+    for (let i = 0; i < STRING_KEY_BYTES; i++)
+        key.push(Math.floor(rng() * 256));
+    return key;
 }
 /**
- * Encrypt a single string `s` with `key` (4 bytes), return hex.
- * Mirrors the reference sample's `aT`/`aW` chain:
- *   cipher[i] = (plain[i] ^ key[(i + (i+1))%4]) & 0xff  (rotating + offset)
+ * 用 6 字节 key + LCG 滚动因子加密单个字符串，返回 hex。
+ * 与 emitter 内联的 Lua IIFE 完全对齐。
  */
-function encryptString(s, key) {
+export function encryptString(s, key) {
+    if (key.length !== STRING_KEY_BYTES) {
+        throw new Error(`encryptString: key must be ${STRING_KEY_BYTES} bytes, got ${key.length}`);
+    }
     const buf = Buffer.from(s, "utf8");
+    let R = (key[0] ^ key[STRING_KEY_BYTES - 1]) >>> 0;
     for (let i = 0; i < buf.length; i++) {
-        const k = key[(i + 1) % 4];
-        buf[i] = (buf[i] ^ (k + i)) & 0xff;
+        const k = key[i % STRING_KEY_BYTES];
+        buf[i] = (buf[i] ^ ((k + i) & 0xff) ^ (R & 0xff)) & 0xff;
+        R = (Math.imul(R, 1664525) + 1013904223) >>> 0;
     }
     return buf.toString("hex").toUpperCase();
 }
-/** Apply encryption to all STRING tokens, accumulating into `cipher.pool`. */
-export function obfuscateStrings(tokens, cipher, seed) {
-    const rng = mulberry32(seed ^ 0x12345678);
-    const masterKey = Buffer.from(cipher.masterKeyHex, "hex");
-    const out = [];
-    let id = 0;
-    for (const t of tokens) {
-        if (t.kind !== TokenKind.STRING) {
-            out.push(t);
-            continue;
-        }
-        // Skip empty / single-char — saves cycles, no info leak.
-        if (t.value.length === 0) {
-            out.push(t);
-            continue;
-        }
-        const usePool = rng() > 0.4 || t.value.length > 4;
-        if (!usePool) {
-            out.push(t);
-            continue;
-        }
-        const blob = encryptString(t.value, Array.from(masterKey));
-        cipher.pool.push({ id: id++, hex: blob });
-        // Replace the string token with a synthetic placeholder.
-        out.push({
-            kind: TokenKind.OP,
-            value: "__STR__",
-            line: t.line,
-            col: t.col,
-            pos: t.pos,
-            // @ts-expect-error metadata channel for emitter
-            __str_id: id - 1,
-            __str_hex: blob,
-        });
-    }
-    return out;
-}
-// Re-export so the decrypt prototype can reuse if needed.
-export { encryptString };
-/** Decrypt a single encrypted blob (for tests / decrypt). */
+/** 解密单个 blob（与加密对称同形）。 */
 export function decryptString(hex, key) {
+    if (key.length !== STRING_KEY_BYTES) {
+        throw new Error(`decryptString: key must be ${STRING_KEY_BYTES} bytes, got ${key.length}`);
+    }
     const buf = Buffer.from(hex, "hex");
+    let R = (key[0] ^ key[STRING_KEY_BYTES - 1]) >>> 0;
     for (let i = 0; i < buf.length; i++) {
-        const k = key[(i + 1) % 4];
-        buf[i] = (buf[i] ^ (k + i)) & 0xff;
+        const k = key[i % STRING_KEY_BYTES];
+        buf[i] = (buf[i] ^ ((k + i) & 0xff) ^ (R & 0xff)) & 0xff;
+        R = (Math.imul(R, 1664525) + 1013904223) >>> 0;
     }
     return buf.toString("utf8");
 }

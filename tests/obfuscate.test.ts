@@ -14,11 +14,11 @@ describe("obfuscate", () => {
     expect(a).not.toBe(b);
   });
 
-  it("emits the same cipher key when given the same seed", () => {
+  it("emits the same cipher pool when given the same seed", () => {
     const src = `print("unchanging")`;
     const a = runPipeline(src, { seed: 42 });
     const b = runPipeline(src, { seed: 42 });
-    expect(a.cipher.masterKeyHex).toBe(b.cipher.masterKeyHex);
+    expect(a.cipher.pool).toEqual(b.cipher.pool);
   });
 
   it("renames local variables", () => {

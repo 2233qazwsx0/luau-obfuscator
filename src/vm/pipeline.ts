@@ -6,10 +6,11 @@
 
 import { compileAST } from "./compiler.js";
 import { serializeFunction } from "./encoder.js";
-import { packBytecode, packBytecodeKeyfused } from "./packer.js";
+import { packBytecode, packBytecodeKeyfused, lzwCompress, streamEncrypt, bytesToHex } from "./packer.js";
 import { buildRuntime } from "./runtime-template.js";
 import { DEFAULT_RUNTIME_PROTECT, type RuntimeProtectOptions } from "./memory.js";
-import { deriveKeyfuseKey } from "./keyfuse.js";
+import { deriveKeyfuseKey, xor512, computeKeyfuseKhSize } from "./keyfuse.js";
+import { deriveRtToken, rtTokenToNibbles, rtMixEncrypt } from "./rtdeps.js";
 import type { Node } from "../parser/parser.js";
 
 export interface VmResult {
@@ -49,9 +50,13 @@ export function compileVM(ast: Node, seed: number): VmResult {
  * v0.9 keyfuse：opts.keyfuse 开启时，在 stream cipher 外层加 512 位 XOR 层，
  * 并把密钥拆成 128 个 nibble 碎片深度融合到运行时代码中。
  *
+ * v0.10 rt_deps：opts.rtDeps 开启时（需 keyfuse），解密链追加 rt_mix 层
+ * （position-dependent ADD，token 依赖 #HEX_BLOB / #_kh），且 keyfuse KEY 的
+ * nibbles 126/127 改由 runtime token 派生。废弃纯静态状态机拼密钥。
+ *
  * @param ast  - The parsed AST (Block node)
  * @param seed - PRNG seed
- * @param opts - 运行时保护选项（内存清理 / 反 dump / 碎片化 / keyfuse，默认全开）
+ * @param opts - 运行时保护选项（内存清理 / 反 dump / 碎片化 / keyfuse / rt_deps，默认全开）
  * @returns Final Luau source that decodes and executes the bytecode
  */
 export function compileVMWithRuntime(
@@ -63,11 +68,45 @@ export function compileVMWithRuntime(
   const proto = compileAST(ast, seed);
   const serialized = serializeFunction(proto);
   const keyfuseOn = opts.keyfuse !== false;
-  // v0.9 keyfuse：512 位 XOR 外层 + 碎片宿主装配。
-  const kfKey = keyfuseOn ? deriveKeyfuseKey(seed) : null;
-  const hex = keyfuseOn
-    ? packBytecodeKeyfused(serialized, cipherKey, kfKey!.keyBytes, true)
-    : packBytecode(serialized, cipherKey, true);
-  // 把 keyHex 透传给运行时模板（用于碎片装配 + XOR 解密）。
-  return buildRuntime(hex, cipherKey, opts, seed, keyfuseOn ? kfKey!.keyHex : null);
+  const rtDepsOn = keyfuseOn && opts.rtDeps !== false;
+
+  if (!keyfuseOn) {
+    // 无 keyfuse：原始 LZW + stream + hex。
+    const hex = packBytecode(serialized, cipherKey, true);
+    return buildRuntime(hex, cipherKey, opts, seed, null);
+  }
+
+  // keyfuse 开启：派生 512 位密钥。
+  const kfKey = deriveKeyfuseKey(seed);
+
+  if (!rtDepsOn) {
+    // keyfuse 但无 rt_deps：LZW + stream + xor512 + hex（v0.9 行为）。
+    const hex = packBytecodeKeyfused(serialized, cipherKey, kfKey.keyBytes, true);
+    return buildRuntime(hex, cipherKey, opts, seed, kfKey.keyHex);
+  }
+
+  // v0.10 rt_deps：解密链追加 rt_mix 层 + KEY nibbles 126/127 运行时派生。
+  // 步骤分解（避免循环依赖：hexLen 不依赖 KEY 内容）：
+  //   1. LZW + stream → streamData（不依赖 keyBytes）
+  //   2. hexLen = streamData.length * 2（xor512 / rt_mix 均保长）
+  //   3. rtToken = deriveRtToken(hexLen, khSize)
+  //   4. 覆盖 keyBytes[63] = rtToken 派生的 2 nibble
+  //   5. xor512(streamData, keyBytes) → xorData
+  //   6. rtMixEncrypt(xorData, rtToken) → rtData
+  //   7. hex = bytesToHex(rtData)
+  const lzwData = lzwCompress(serialized);
+  const streamData = streamEncrypt(lzwData, cipherKey);
+  const hexLen = streamData.length * 2;
+  const rtToken = deriveRtToken(hexLen, computeKeyfuseKhSize());
+  const [n126, n127] = rtTokenToNibbles(rtToken);
+  kfKey.keyBytes[63] = n126 * 16 + n127;
+  // 重建 keyHex（nibbles 126/127 已被 rtToken 覆盖）。
+  kfKey.keyHex = kfKey.keyBytes
+    .map((b) => b.toString(16).padStart(2, "0").toUpperCase())
+    .join("");
+  const xorData = xor512(streamData, kfKey.keyBytes);
+  const rtData = rtMixEncrypt(xorData, rtToken);
+  const hex = bytesToHex(rtData);
+  // buildRuntime 内部用 hex.length + khSize 重算同一 rtToken，传给 genKeyfuseAssembly。
+  return buildRuntime(hex, cipherKey, opts, seed, kfKey.keyHex);
 }
