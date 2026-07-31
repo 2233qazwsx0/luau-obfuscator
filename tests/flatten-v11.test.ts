@@ -2,7 +2,7 @@
 //
 // 验证：
 //   1. flattenRecursive 启用嵌套函数 flatten（函数体含 __b1 dispatch var）
-//   2. 状态转移 50% 概率升级为 (OPAQUE_TRUE and T) or EXIT_STATE
+//   2. 状态转移每 stride（5-10）个分支升级为 (OPAQUE_TRUE and T) or EXIT_STATE
 //   3. 假路径 case（__d 垃圾 local + __b = -1）
 //   4. duplicate-return 修复（return 块 case body 只有一个 return）
 //   5. 端到端：复杂源码（函数 + if + return）flatten + emit 不报错
@@ -81,11 +81,12 @@ describe("flattenRecursive: 嵌套函数 flatten", () => {
 
 describe("flattenRecursive: 不透明谓词转移", () => {
   it("转移语句含 and/or 形式（多样化谓词）", () => {
-    // 用足够长的源码触发多个转移，确保至少 1 个升级为不透明谓词
-    const src = `local a = 1\nlocal b = 2\nlocal c = 3\nlocal d = 4\nlocal e = 5\nlocal f = 6\nprint(a + b + c + d + e + f)`;
+    // v0.8: stride ∈ [5,10]，需 ≥ 10 个转移确保至少 1 个升级为不透明谓词。
+    // 12 条语句 → 11 个非 exit 块 → 11 个转移 → 保证覆盖最大 stride=10。
+    const src = `local a = 1\nlocal b = 2\nlocal c = 3\nlocal d = 4\nlocal e = 5\nlocal f = 6\nlocal g = 7\nlocal h = 8\nlocal i = 9\nlocal j = 10\nlocal k = 11\nlocal l = 12\nprint(a + b + c + d + e + f + g + h + i + j + k + l)`;
     const ast = parseSrc(src);
     const out = emitNode(flattenRecursive(ast, 42));
-    // 50% 概率升级，6 个转移至少 1 个升级的概率 > 98%
+    // stride 计数器在第 stride 次调用时插入不透明谓词
     // 检查 __b 赋值行同时含 " and " 和 " or "（不透明谓词转移特征）
     const lines = out.split("\n");
     const hasOpaqueTransition = lines.some(
@@ -95,8 +96,8 @@ describe("flattenRecursive: 不透明谓词转移", () => {
   });
 
   it("不透明谓词形式多样化（5 种）", () => {
-    // 多个 seed 跑，收集所有转移表达式，验证至少出现 2 种不同形式
-    const src = `local a = 1\nlocal b = 2\nlocal c = 3\nlocal d = 4\nlocal e = 5\nprint(a + b + c + d + e)`;
+    // v0.8: stride ∈ [5,10]，用 12 条语句（11 转移）确保每 seed 至少 1 个谓词。
+    const src = `local a = 1\nlocal b = 2\nlocal c = 3\nlocal d = 4\nlocal e = 5\nlocal f = 6\nlocal g = 7\nlocal h = 8\nlocal i = 9\nlocal j = 10\nlocal k = 11\nlocal l = 12\nprint(a + b + c + d + e + f + g + h + i + j + k + l)`;
     const forms = new Set<string>();
     for (const seed of [1, 7, 42, 100, 999, 2024, 12345, 67890]) {
       const ast = parseSrc(src);
@@ -109,11 +110,12 @@ describe("flattenRecursive: 不透明谓词转移", () => {
     expect(forms.size).toBeGreaterThanOrEqual(2);
   });
 
-  it("部分转移保持直赋值（非 100% 升级）", () => {
-    const src = `local a = 1\nlocal b = 2\nlocal c = 3\nlocal d = 4\nlocal e = 5\nlocal f = 6\nlocal g = 7\nlocal h = 8\nprint(a + b + c + d + e + f + g + h)`;
+  it("部分转移保持直赋值（stride 降频后大部分是直赋值）", () => {
+    // v0.8: stride ∈ [5,10]，12 条语句 → 11 转移，仅 1 个升级为不透明谓词。
+    // 剩余 10 个保持直赋值 `__b2 = <number>`。
+    const src = `local a = 1\nlocal b = 2\nlocal c = 3\nlocal d = 4\nlocal e = 5\nlocal f = 6\nlocal g = 7\nlocal h = 8\nlocal i = 9\nlocal j = 10\nlocal k = 11\nlocal l = 12\nprint(a + b + c + d + e + f + g + h + i + j + k + l)`;
     const ast = parseSrc(src);
     const out = emitNode(flattenRecursive(ast, 42));
-    // 8 个转移，50% 概率 → 至少 1 个直赋值（__b2 = <number> 不带 and/or）
     // 直赋值形如 `__b2 = 123`（后面不带 and/or）
     expect(out).toMatch(/__b\d+\s*=\s*\d+\s*$/m);
   });

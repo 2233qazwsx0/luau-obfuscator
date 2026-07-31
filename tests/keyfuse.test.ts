@@ -6,14 +6,22 @@ import {
   genKeyfuseAssembly,
   KEYFUSE_KEY_HEX_LEN,
   KEYFUSE_NIBBLES,
+  KEYFUSE_REAL_CASES,
+  KEYFUSE_CHUNK_NIBBLES,
 } from "../src/vm/keyfuse.js";
 import {
   packBytecode,
   packBytecodeKeyfused,
   unpackBytecodeKeyfused,
+  unpackBytecode,
 } from "../src/vm/packer.js";
+import { buildRuntime } from "../src/vm/runtime-template.js";
+import { DEFAULT_RUNTIME_PROTECT } from "../src/vm/memory.js";
+import * as fs from "fs";
+import * as path from "path";
+import { fileURLToPath } from "url";
 
-/** 把任意字符串转成二进制串（LZW 期望 0..255 字节序列，非 Unicode 码点）。 */
+/** 把任意字符串转成二进制串（stream cipher 期望 0..255 字节序列，非 Unicode 码点）。 */
 function toBinary(s: string): string {
   return Buffer.from(s, "utf8").toString("binary");
 }
@@ -27,6 +35,9 @@ function _B(a: number, b: number): number {
  * 解析 genKeyfuseAssembly 生成的 assemblyCode 并模拟 dispatch loop 执行，
  * 验证装配出的 KEY == keyHex。这是最关键的端到端正确性检查：
  * 如果 dispatch loop 逻辑、_B() 索引、state 转移有任何错误，KEY 会错。
+ *
+ * v0.8：每个真实 case 一次装配 16 个 nibble（8 字节），不再逐 nibble 一个 case。
+ * 模拟器需从 string.format 行提取 16 个 _B(N, _kk) 索引，逐个查 _kh 拼出 nibble。
  */
 function simulateAssembly(keyHex: string, seed: number): string {
   const kf = genKeyfuseAssembly(keyHex, seed);
@@ -52,16 +63,26 @@ function simulateAssembly(keyHex: string, seed: number): string {
   expect(initMatch).not.toBeNull();
   let curState = Number(initMatch![1]);
 
-  // 解析所有 case：stateId → (i, nextState)。真实 case 与死分支 case 结构相同。
-  // 真实 case: __kf_b == SID then KEY = KEY .. fmt(_kh[_B(I, _kk) + 1] % 16) __kf_b = NEXT
-  // 死分支 case 结构相同。exit case: __kf_b == SID then break
+  // 解析所有 case：stateId → (nibblePositions[], nextState)。
+  // v0.8 case body: KEY = KEY .. string.format("%X...%X", _kh[_B(N0, _kk) + 1] % 16, ..., _kh[_B(N15, _kk) + 1] % 16)
+  // 从 string.format 行提取所有 _B(N, _kk) 中的 N 值。
   const caseRe =
-    /__kf_b == (\d+) then\s*\n\s*KEY = KEY \.\. string\.format\("%X", _kh\[_B\((\d+), _kk\) \+ 1\] % 16\)\s*\n\s*__kf_b = (\d+)/g;
+    /__kf_b == (\d+) then\s*\n\s*KEY = KEY \.\. string\.format\("[^"]*",\s*([^\n]+)\)\s*\n\s*__kf_b = (\d+)/g;
   const exitRe = /__kf_b == (\d+) then\s*\n\s*break/;
-  const cases = new Map<number, { i: number; next: number }>();
+  const cases = new Map<number, { nibblePositions: number[]; next: number }>();
   let m: RegExpExecArray | null;
   while ((m = caseRe.exec(code)) !== null) {
-    cases.set(Number(m[1]), { i: Number(m[2]), next: Number(m[3]) });
+    const sid = Number(m[1]);
+    const exprsStr = m[2];
+    const next = Number(m[3]);
+    // 提取所有 _B(N, _kk) 中的 N 值（_kh 查找路径）。
+    const positions: number[] = [];
+    const exprRe = /_B\((\d+), _kk\)/g;
+    let em: RegExpExecArray | null;
+    while ((em = exprRe.exec(exprsStr)) !== null) {
+      positions.push(Number(em[1]));
+    }
+    cases.set(sid, { nibblePositions: positions, next });
   }
   const exitMatch = code.match(exitRe);
   expect(exitMatch).not.toBeNull();
@@ -81,11 +102,14 @@ function simulateAssembly(keyHex: string, seed: number): string {
     if (!c) {
       throw new Error(`simulate: no case for state ${curState}`);
     }
-    // Lua: _kh[_B(i, _kk) + 1] → 1-based → JS 索引 _B(i,kk) (0-based)。
-    const slot = _B(c.i, kk); // 0-based 索引进 khValues
-    const val = khValues[slot]!;
-    const nibble = val % 16;
-    key += nibble.toString(16).toUpperCase();
+    // 每 case 16 个 nibble 位置（v0.8 压缩：8 字节 / case）。
+    for (const nibblePos of c.nibblePositions) {
+      // Lua: _kh[_B(i, _kk) + 1] → 1-based → JS 索引 _B(i,kk) (0-based)。
+      const slot = _B(nibblePos, kk); // 0-based 索引进 khValues
+      const val = khValues[slot]!;
+      const nibble = val % 16;
+      key += nibble.toString(16).toUpperCase();
+    }
     curState = c.next;
     if (++steps > 10000) throw new Error("simulate: too many steps");
   }
@@ -162,7 +186,7 @@ describe("keyfuse: pack/unpack with 512-bit outer layer", () => {
     const cipherKey = 123;
     const data = toBinary("same input data");
     const kfHex = packBytecodeKeyfused(data, cipherKey, keyBytes, true);
-    // 直接 LZW+stream pack（无 XOR 外层）应不同。
+    // 直接 stream pack（无 XOR 外层）应不同。
     const plainHex = packBytecode(data, cipherKey, true);
     expect(kfHex).not.toBe(plainHex);
   });
@@ -224,12 +248,15 @@ describe("keyfuse: two obfuscations differ (verification standard)", () => {
 });
 
 describe("keyfuse: structure invariants", () => {
-  it("emits exactly 128 real cases + decoy cases + 1 exit", () => {
+  it("emits 8 real cases + decoy cases + 1 exit (v0.8 compressed)", () => {
     const { keyHex } = deriveKeyfuseKey(42);
     const kf = genKeyfuseAssembly(keyHex, 42);
-    // 真实 case 数 = KEYFUSE_NIBBLES (128)；死分支 case 数 >= 4（decoyCount）。
-    const realCaseCount = (kf.assemblyCode.match(/KEY = KEY \.\. string\.format/g) || []).length;
-    expect(realCaseCount).toBeGreaterThanOrEqual(KEYFUSE_NIBBLES); // 128 真实 + 死分支
+    // v0.8: 真实 case 数 = KEYFUSE_REAL_CASES (8)；死分支 case 数 >= 8。
+    // 总 case 数（含 string.format）= 8 真实 + numDecoyCases 死分支，落在 30-50 区间。
+    const formatCount = (kf.assemblyCode.match(/KEY = KEY \.\. string\.format/g) || []).length;
+    expect(formatCount).toBeGreaterThanOrEqual(KEYFUSE_REAL_CASES); // 8 真实 + 死分支
+    expect(formatCount).toBeGreaterThanOrEqual(30); // v0.8 目标：30-50 case
+    expect(formatCount).toBeLessThanOrEqual(50);
     // exit case 恰好 1 个。
     const exitCount = (kf.assemblyCode.match(/break/g) || []).length;
     expect(exitCount).toBe(1);
@@ -239,15 +266,29 @@ describe("keyfuse: structure invariants", () => {
     expect(kf.assemblyCode).toContain("while true do");
   });
 
+  it("each real case assembles 16 nibbles (8 bytes) via string.format", () => {
+    const { keyHex } = deriveKeyfuseKey(42);
+    const kf = genKeyfuseAssembly(keyHex, 42);
+    // v0.8: 每 case 的 format 字符串含 16 个 %X（8 字节 / case）。
+    // 提取所有 string.format 调用的 format 字符串部分。
+    const fmtMatches = kf.assemblyCode.match(/string\.format\("[^"]*"/g) || [];
+    expect(fmtMatches.length).toBeGreaterThanOrEqual(KEYFUSE_REAL_CASES);
+    for (const fm of fmtMatches) {
+      const xCount = (fm.match(/%X/g) || []).length;
+      expect(xCount).toBe(KEYFUSE_CHUNK_NIBBLES); // 16
+    }
+  });
+
   it("decoy fragments use the same structure as real fragments", () => {
     const { keyHex } = deriveKeyfuseKey(42);
     const kf = genKeyfuseAssembly(keyHex, 42);
-    // 所有 case（真实 + 死分支）都应匹配相同的 KEY = KEY .. string.format 模式。
+    // v0.8: 所有 case（真实 + 死分支）都应匹配相同的 KEY = KEY .. string.format 模式。
+    // string.format 调用整行在同一行，用 [^\n]+ 匹配表达式部分。
     const allCases = kf.assemblyCode.match(
-      /__kf_b == \d+ then\s*\n\s*KEY = KEY \.\. string\.format\("%X", _kh\[_B\(\d+, _kk\) \+ 1\] % 16\)\s*\n\s*__kf_b = \d+/g,
+      /__kf_b == \d+ then\s*\n\s*KEY = KEY \.\. string\.format\([^\n]+\n\s*__kf_b = \d+/g,
     );
     expect(allCases).not.toBeNull();
-    expect(allCases!.length).toBeGreaterThanOrEqual(KEYFUSE_NIBBLES);
+    expect(allCases!.length).toBeGreaterThanOrEqual(KEYFUSE_REAL_CASES);
   });
 
   it("cleanup nils _kh, _kk, __kf_b after assembly", () => {
@@ -256,5 +297,88 @@ describe("keyfuse: structure invariants", () => {
     expect(kf.assemblyCode).toContain("_kh = nil");
     expect(kf.assemblyCode).toContain("_kk = nil");
     expect(kf.assemblyCode).toContain("__kf_b = nil");
+  });
+});
+
+describe("v0.8 性能修复：keyfuse 装配 + 解密链 benchmark", () => {
+  // v0.8 目标：SANA HUB 500 行脚本混淆后在 Roblox 中 5 秒内完成加载执行。
+  // 此 benchmark 验证关键瓶颈已消除：
+  //   1. dispatch case 数 30-50（v0.7 为 300+）
+  //   2. 运行时模板无 lzw_decode 函数（bi 层去重）
+  //   3. keyfuse 装配生成 < 50ms（代码生成，非运行时）
+  //   4. 模拟 dispatch loop 执行 < 5ms（8 case vs 128 case）
+  //   5. 解密链 stream cipher 往返无 LZW
+
+  it("dispatch case 总数在 30-50 范围（v0.7 为 300+）", () => {
+    const { keyHex } = deriveKeyfuseKey(42);
+    const kf = genKeyfuseAssembly(keyHex, 42);
+    // 真实 case (8) + 死分支 case (>=8) + exit (1) = 总 elseif/if 分支
+    const caseCount = (kf.assemblyCode.match(/__kf_b == \d+ then/g) || []).length;
+    expect(caseCount).toBeGreaterThanOrEqual(30);
+    expect(caseCount).toBeLessThanOrEqual(50);
+  });
+
+  it("运行时模板不含 lzw_decode 函数定义/调用（bi 层去重）", () => {
+    const templatePath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../runtime/vm-runtime.template.lua",
+    );
+    const template = fs.readFileSync(templatePath, "utf8");
+    // 注释中提到 lzw_decode 是历史说明，实际函数定义/调用不应存在。
+    expect(template).not.toMatch(/function\s+lzw_decode/);
+    expect(template).not.toMatch(/[^_a-zA-Z]lzw_decode\s*\(/);
+    // stream_decrypt 仍保留（XOR 变换，开销可忽略）。
+    expect(template).toContain("stream_decrypt");
+  });
+
+  it("生成的运行时源码不含 lzw_decode 调用", () => {
+    const { keyHex } = deriveKeyfuseKey(42);
+    const runtime = buildRuntime(
+      "A1B2C3D4".repeat(30),
+      42,
+      { ...DEFAULT_RUNTIME_PROTECT, keyfuse: true, rtDeps: true },
+      42,
+      keyHex,
+    );
+    expect(runtime).not.toMatch(/function\s+lzw_decode/);
+    expect(runtime).not.toMatch(/[^_a-zA-Z]lzw_decode\s*\(/);
+    // 解密链：stream_decrypt → (无 LZW) → serialized
+    expect(runtime).toContain("stream_decrypt");
+  });
+
+  it("keyfuse 装配生成耗时 < 50ms（多 seed 平均）", () => {
+    const seeds = [1, 42, 100, 999, 54321];
+    const start = performance.now();
+    for (const seed of seeds) {
+      const { keyHex } = deriveKeyfuseKey(seed);
+      genKeyfuseAssembly(keyHex, seed);
+    }
+    const elapsed = performance.now() - start;
+    const avgPerSeed = elapsed / seeds.length;
+    expect(avgPerSeed).toBeLessThan(50);
+  });
+
+  it("模拟 dispatch loop 执行 < 5ms（8 case vs v0.7 128+ case）", () => {
+    const { keyHex } = deriveKeyfuseKey(42);
+    const start = performance.now();
+    const result = simulateAssembly(keyHex, 42);
+    const elapsed = performance.now() - start;
+    expect(result).toBe(keyHex); // 正确性
+    expect(elapsed).toBeLessThan(5); // 性能
+  });
+
+  it("解密链 stream cipher 往返无 LZW（pack → unpack = identity）", () => {
+    const cipherKey = 200;
+    const samples = [
+      "hello",
+      "x".repeat(500),
+      toBinary("SANA HUB 测试"),
+    ];
+    for (const s of samples) {
+      // v0.8: packBytecode 仅 stream encrypt + hex（无 LZW）。
+      const hex = packBytecode(s, cipherKey);
+      const dec = unpackBytecode(hex, cipherKey);
+      expect(dec).toBe(s);
+    }
   });
 });

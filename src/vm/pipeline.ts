@@ -1,12 +1,16 @@
 // src/vm/pipeline.ts — VM bytecode compilation pipeline entry.
 //
 // Takes a parsed AST and a PRNG seed, compiles to FuncPrototype,
-// serializes to binary, packs with LZW+XOR, returns a hex string
-// suitable for embedding in a Luau runtime template.
+// serializes to binary, packs with stream-cipher (+ optional keyfuse XOR +
+// rt_mix), returns a hex string suitable for embedding in a Luau runtime
+// template.
+//
+// v0.8 性能修复：移除 LZW 压缩层（bi 层去重）。pipeline 不再调用 lzwCompress，
+// packer.packBytecode / packBytecodeKeyfused 内部仅做 stream cipher (+ xor512)。
 
 import { compileAST, type CompilerOptions, type InsncryptMode } from "./compiler.js";
 import { serializeFunction } from "./encoder.js";
-import { packBytecode, packBytecodeKeyfused, lzwCompress, streamEncrypt, bytesToHex } from "./packer.js";
+import { packBytecode, packBytecodeKeyfused, streamEncrypt, bytesToHex } from "./packer.js";
 import { buildRuntime } from "./runtime-template.js";
 import { DEFAULT_RUNTIME_PROTECT, type RuntimeProtectOptions } from "./memory.js";
 import { deriveKeyfuseKey, xor512, computeKeyfuseKhSize } from "./keyfuse.js";
@@ -45,7 +49,8 @@ export function compileVM(
   const compilerOpts: CompilerOptions = { insnCrypt };
   const proto = compileAST(ast, seed, compilerOpts);
   const serialized = serializeFunction(proto);
-  const hex = packBytecode(serialized, cipherKey, true);
+  // v0.8: LZW 移除，packBytecode 内部仅做 stream encrypt + hex。
+  const hex = packBytecode(serialized, cipherKey);
   return { hex, cipherKey };
 }
 
@@ -79,8 +84,8 @@ export function compileVMWithRuntime(
   const rtDepsOn = keyfuseOn && opts.rtDeps !== false;
 
   if (!keyfuseOn) {
-    // 无 keyfuse：原始 LZW + stream + hex。
-    const hex = packBytecode(serialized, cipherKey, true);
+    // 无 keyfuse：v0.8 仅 stream + hex（LZW 已移除）。
+    const hex = packBytecode(serialized, cipherKey);
     return buildRuntime(hex, cipherKey, opts, seed, null);
   }
 
@@ -88,22 +93,21 @@ export function compileVMWithRuntime(
   const kfKey = deriveKeyfuseKey(seed);
 
   if (!rtDepsOn) {
-    // keyfuse 但无 rt_deps：LZW + stream + xor512 + hex（v0.9 行为）。
-    const hex = packBytecodeKeyfused(serialized, cipherKey, kfKey.keyBytes, true);
+    // keyfuse 但无 rt_deps：stream + xor512 + hex（v0.8 移除 LZW 后）。
+    const hex = packBytecodeKeyfused(serialized, cipherKey, kfKey.keyBytes);
     return buildRuntime(hex, cipherKey, opts, seed, kfKey.keyHex);
   }
 
   // v0.10 rt_deps：解密链追加 rt_mix 层 + KEY nibbles 126/127 运行时派生。
-  // 步骤分解（避免循环依赖：hexLen 不依赖 KEY 内容）：
-  //   1. LZW + stream → streamData（不依赖 keyBytes）
+  // v0.8 步骤分解（LZW 已移除，避免循环依赖：hexLen 不依赖 KEY 内容）：
+  //   1. stream → streamData（不依赖 keyBytes）
   //   2. hexLen = streamData.length * 2（xor512 / rt_mix 均保长）
   //   3. rtToken = deriveRtToken(hexLen, khSize)
   //   4. 覆盖 keyBytes[63] = rtToken 派生的 2 nibble
   //   5. xor512(streamData, keyBytes) → xorData
   //   6. rtMixEncrypt(xorData, rtToken) → rtData
   //   7. hex = bytesToHex(rtData)
-  const lzwData = lzwCompress(serialized);
-  const streamData = streamEncrypt(lzwData, cipherKey);
+  const streamData = streamEncrypt(serialized, cipherKey);
   const hexLen = streamData.length * 2;
   const rtToken = deriveRtToken(hexLen, computeKeyfuseKhSize());
   const [n126, n127] = rtTokenToNibbles(rtToken);

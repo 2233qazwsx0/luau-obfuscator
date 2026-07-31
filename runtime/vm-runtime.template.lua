@@ -5,7 +5,7 @@
 -- on both standalone Luau and Roblox.
 --
 -- Placeholders (substituted by src/vm/runtime-template.ts):
---   __HEX_BLOB__     → packed hex string (LZW + stream-cipher)
+--   __HEX_BLOB__     → packed hex string (stream-cipher; v0.8 LZW 已移除)
 --   __CIPHER_KEY__   → stream cipher key (number 0-255)
 --
 -- NOTE: the _B (bitxor) polyfill is intentionally NOT defined here. When this
@@ -198,45 +198,11 @@ local function stream_decrypt(data, key)
 end
 
 -- --------------------------------------------------------------------------
--- LZW decompress  (mirrors packer.lzwDecompress — base-36 variable-length)
+-- v0.8 性能修复：LZW 解压层已移除（bi 层去重）。
+-- 原 lzw_decode 函数（base-36 变长字典解码）在运行时需要重建 256 项字典 +
+-- 逐 code 字符串拼接，是 Roblox 脚本超时的主要瓶颈。现在解密链只保留
+-- stream cipher (XOR 变换)，开销可忽略。serialized = decrypted（直接透传）。
 -- --------------------------------------------------------------------------
-local function lzw_decode(s)
-  if #s == 0 then return "" end
-  local dict = {}
-  for i = 0, 255 do dict[i] = string.char(i) end
-  local next_code = 256
-  local pos = 1
-
-  local function read_code()
-    local len = tonumber(string.sub(s, pos, pos), 36)
-    pos = pos + 1
-    local code = tonumber(string.sub(s, pos, pos + len - 1), 36)
-    pos = pos + len
-    return code
-  end
-
-  local first = read_code()
-  local prev = string.char(first)
-  local result = { prev }
-
-  while pos <= #s do
-    local code = read_code()
-    local entry
-    if code < next_code then
-      entry = dict[code]
-    elseif code == next_code then
-      entry = prev .. string.sub(prev, 1, 1)
-    else
-      error("LZW: invalid code " .. tostring(code) .. " at dict " .. tostring(next_code))
-    end
-    result[#result + 1] = entry
-    dict[next_code] = prev .. string.sub(entry, 1, 1)
-    next_code = next_code + 1
-    prev = entry
-  end
-
-  return table.concat(result)
-end
 
 -- --------------------------------------------------------------------------
 -- Byte reader over a binary string
@@ -1100,7 +1066,8 @@ local function vm_boot()
   dec_input = xor_bytes_512(dec_input, KEY)
   --[[__KEYFUSE_XOR_STEP_END__]]
   local decrypted = stream_decrypt(dec_input, CIPHER_KEY)
-  local serialized = lzw_decode(decrypted)
+  -- v0.8: LZW 解压步骤移除（bi 层去重）。decrypted 即为 serialized bytecode。
+  local serialized = decrypted
   local reader = make_reader(serialized)
   local proto = deserialize_proto(reader)
   -- Environment: a WRITABLE table that falls through to _G for reads.
@@ -1115,7 +1082,7 @@ local function vm_boot()
   --[[__MEMWIPE_BEGIN__]]
   -- 解码完成、执行前：立即清空所有中间解码数据 + 强制 GC。
   -- 此时 proto.instructions 已独立存在于内存，原始密文/明文/序列化串不再需要。
-  -- dump 只能拿到反序列化后的指令数组，拿不到 LZW 解压后的完整二进制。
+  -- v0.8: LZW 移除后，decrypted == serialized（同一引用），secure_nil 幂等。
   -- v0.9 keyfuse: 一并销毁 KEY 与 XOR 中间结果。
   secure_nil(cipher_data)
   secure_nil(dec_input)

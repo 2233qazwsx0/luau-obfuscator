@@ -36,9 +36,20 @@ export const KEYFUSE_KEY_HEX_LEN = KEYFUSE_KEY_BYTES * 2; // 128
 export const KEYFUSE_NIBBLES = KEYFUSE_KEY_HEX_LEN; // 128
 
 /**
+ * v0.8 性能修复：每个 dispatch case 一次装配 8 字节（16 nibble）。
+ * 真实 case 数从 128 降至 8（128 / 16 = 8），dispatch 分支数从 300+ 降至 30-50。
+ * 每 case 内部一次 string.format 拼出 16 个 hex 字符，比单 nibble 逐 case 拼接快 ~10x。
+ */
+export const KEYFUSE_CHUNK_NIBBLES = 16; // 8 字节 / case
+export const KEYFUSE_REAL_CASES = KEYFUSE_NIBBLES / KEYFUSE_CHUNK_NIBBLES; // 8
+
+/**
  * 计算 _kh 宿主表的大小（128 真 + decoyCount 假）。
  * 仅依赖 decoyRate（默认 0.35），不依赖 seed / rtToken。
  * pipeline 用此值在打包前算出 rtToken（#_kh 项）。
+ *
+ * v0.8：_kh 表大小不变（仍 128 真 + 44 假 = 172），只是 dispatch loop 的 case 数
+ * 从 128+44=172 降到 8+decoyCases。decoyRate 仍控制 _kh 表大小，与 case 数解耦。
  */
 export function computeKeyfuseKhSize(decoyRate: number = 0.35): number {
   const decoyCount = Math.max(4, Math.floor(KEYFUSE_NIBBLES * decoyRate));
@@ -220,12 +231,16 @@ export function genKeyfuseAssembly(
     khValues[slot] = hosts[hIdx]!.value;
   });
 
-  // ---- 4. D4 风格 dispatch loop ----
-  // 128 个真实 case + 1 个 exit case + 假碎片死分支 case。
-  // state ID 由 seed 打乱（mulberry32 生成大数，互不相同）。
-  // 物理 case 顺序也打乱（elseif 链顺序不影响执行，由 __b 值匹配）。
-  const numRealCases = KEYFUSE_NIBBLES; // 128
-  const numDecoyCases = decoyHostIdxs.length;
+  // ---- 4. D4 风格 dispatch loop（v0.8 压缩版）----
+  // v0.8 性能修复：每个真实 case 一次装配 8 字节（16 nibble），真实 case 数从
+  // 128 降至 8。死分支 case 数也按比例压缩，总 case 数 30-50（v0.7 为 300+）。
+  // case body 一次 string.format 拼 16 个 hex 字符，比逐 nibble 拼接快 ~10x。
+  // state ID 仍由 seed 打乱（mulberry32 大数，互不相同）；物理 case 顺序打乱；
+  // 装配顺序由 dispatch state 链决定 → D4 控制流混淆效果保留。
+  const numRealCases = KEYFUSE_REAL_CASES; // 8（每 case 16 nibble = 8 字节）
+  // 死分支 case 数：与真实 case 数成比例，目标总 case 数 30-50。
+  // 每个真实 case 配 ~4 个死分支 → 8 真 + 32 假 = 40 case（落在 30-50 区间）。
+  const numDecoyCases = Math.max(8, numRealCases * 4);
   const totalCases = numRealCases + numDecoyCases;
 
   // 生成 state ID 池：totalCases 个真实/死分支 case + 1 个 exit。
@@ -240,19 +255,34 @@ export function genKeyfuseAssembly(
     }
   }
   const exitId = stateIds[totalCases]!; // 最后一个作 exit
-  // 真实 case i 的 state ID = stateIds[i]，下一状态 = stateIds[i+1]（i<127），
-  // i==127 时下一状态 = exitId。
-  // 死分支 case 的 state ID = stateIds[128..]，永不作为转移目标。
+  // 真实 case i 的 state ID = stateIds[i]，下一状态 = stateIds[i+1]（i<7），
+  // i==7 时下一状态 = exitId。
+  // 死分支 case 的 state ID = stateIds[8..]，永不作为转移目标。
 
   // 物理 case 顺序打乱：把所有 case（真实 + 死分支 + exit）混排进 elseif 链。
   const caseOrder: number[] = [];
   for (let i = 0; i < totalCases + 1; i++) caseOrder.push(i); // 0..totalCases
-  // caseOrder[k] = case 类型索引：< 128 真实 case i；128..127+decoy 死分支；totalCases exit
+  // caseOrder[k] = case 类型索引：< 8 真实 case i；8..7+decoy 死分支；totalCases exit
   for (let i = caseOrder.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));
     const tmp = caseOrder[i]!;
     caseOrder[i] = caseOrder[j]!;
     caseOrder[j] = tmp;
+  }
+
+  // 为死分支 case 预生成 16 个 fake i（均反推出假碎片槽 129..N）。
+  // 每 case 一组独立 fake i，使 case body 看起来与真实 case 一致。
+  // 真实 case body：16 个 _kh[_B(I*16+j, _kk)+1] % 16（j=0..15）。
+  // 死分支 case body：16 个 _kh[_B(fakeI_j, _kk)+1] % 16，fakeI_j 反推到不同假碎片槽。
+  const decoyFakeIs: number[][] = [];
+  for (let d = 0; d < numDecoyCases; d++) {
+    const fakeGroup: number[] = [];
+    for (let j = 0; j < KEYFUSE_CHUNK_NIBBLES; j++) {
+      // 假碎片槽范围 129..(128+decoyCount)，循环取以分散。
+      const fakeSlot = 129 + ((d * KEYFUSE_CHUNK_NIBBLES + j) % decoyHostIdxs.length);
+      fakeGroup.push((fakeSlot - 1) ^ kk); // 反推 i 使 _B(i,_kk)+1 == fakeSlot
+    }
+    decoyFakeIs.push(fakeGroup);
   }
 
   // ---- 5. 发射 Lua 代码 ----
@@ -271,7 +301,7 @@ export function genKeyfuseAssembly(
   const realFusedCode = rfLines.join("\n");
 
   // 5b. 装配段（晚期段）。
-  lines.push("-- v0.9 keyfuse: 512 位密钥深度融合装配。");
+  lines.push("-- v0.9 keyfuse: 512 位密钥深度融合装配（v0.8 压缩：每 case 8 字节）。");
   lines.push("-- _kh 表混存真实+假碎片宿主；dispatch loop 按 _B() 动态索引打散装配。");
   // _kh 表（值已打乱）。
   lines.push(`local _kh = {`);
@@ -294,7 +324,8 @@ export function genKeyfuseAssembly(
   let firstCase = true;
   for (const caseIdx of caseOrder) {
     if (caseIdx < numRealCases) {
-      // 真实 case：装配逻辑位置 caseIdx 的 nibble。
+      // 真实 case：一次装配 16 个 nibble（8 字节）。
+      // case i 处理 nibble 位置 [i*16, (i+1)*16)。
       const i = caseIdx;
       const sid = stateIds[i]!;
       const nextSid =
@@ -302,34 +333,46 @@ export function genKeyfuseAssembly(
       const branchKw = firstCase ? "if" : "elseif";
       firstCase = false;
       lines.push(`  ${branchKw} __kf_b == ${sid} then`);
-      // v0.10 rt_deps：nibbles 126/127 从 _rt_tok 派生，不走 _kh。
-      if (rtActive && (i === 126 || i === 127)) {
-        // (token >>> 4) & 0xF → nibble 126；(token >>> 8) & 0xF → nibble 127。
-        const shift = i === 126 ? 4 : 8;
-        lines.push(
-          `    KEY = KEY .. string.format("%X", math.floor(_rt_tok / ${1 << shift}) % 16)`,
-        );
-      } else {
-        // _B(i, _kk) + 1 → 槽位；% 16 → nibble；string.format("%X", ...) → hex 字符。
-        lines.push(
-          `    KEY = KEY .. string.format("%X", _kh[_B(${i}, _kk) + 1] % 16)`,
-        );
+      // 构造 16 个 nibble 表达式。case 7 (i==7) 处理 nibbles 112..127：
+      //   - nibbles 112..125 (j=0..14)：从 _kh 读取
+      //   - nibbles 126, 127 (j=14, 15)：rtActive 时从 _rt_tok 读取
+      // 其余 case (i<7)：全部从 _kh 读取 16 个 nibble。
+      const nibbleExprs: string[] = [];
+      for (let j = 0; j < KEYFUSE_CHUNK_NIBBLES; j++) {
+        const nibblePos = i * KEYFUSE_CHUNK_NIBBLES + j;
+        if (rtActive && i === numRealCases - 1 && j >= KEYFUSE_CHUNK_NIBBLES - 2) {
+          // 最后 2 个 nibble（126, 127）从 _rt_tok 派生。
+          // j == 14 → nibble 126 → (token >>> 4) & 0xF → math.floor(_rt_tok / 16) % 16
+          // j == 15 → nibble 127 → (token >>> 8) & 0xF → math.floor(_rt_tok / 256) % 16
+          const shift = j === KEYFUSE_CHUNK_NIBBLES - 2 ? 4 : 8;
+          nibbleExprs.push(`math.floor(_rt_tok / ${1 << shift}) % 16`);
+        } else {
+          // _B(nibblePos, _kk) + 1 → 槽位；% 16 → nibble。
+          nibbleExprs.push(`_kh[_B(${nibblePos}, _kk) + 1] % 16`);
+        }
       }
+      // 一次 string.format 拼 16 个 %X → 8 字节 hex 字符串。
+      const fmt = "%X".repeat(KEYFUSE_CHUNK_NIBBLES);
+      lines.push(
+        `    KEY = KEY .. string.format("${fmt}", ${nibbleExprs.join(", ")})`,
+      );
       lines.push(`    __kf_b = ${nextSid}`);
     } else if (caseIdx < totalCases) {
-      // 死分支 case：结构与真实 case 完全相同，但访问假碎片槽（垃圾 nibble）。
+      // 死分支 case：结构与真实 case 完全相同（16 个 _kh 查找），但访问假碎片槽。
       // state ID 永不被转移目标命中 → 不可达 → KEY 不被污染。
       const decoyPos = caseIdx - numRealCases;
       const sid = stateIds[caseIdx]!;
       const fakeNext = stateIds[caseIdx]!; // 自指（不可达，无意义）
-      const fakeSlot = 129 + decoyPos; // 假碎片槽
-      // 用一个与真实 case 形态一致的索引表达式（不影响正确性，永不可达）。
-      const fakeI = (fakeSlot - 1) ^ kk; // 反推一个 i 使 _B(i,_kk)+1 == fakeSlot
+      const fakeGroup = decoyFakeIs[decoyPos]!;
       const branchKw = firstCase ? "if" : "elseif";
       firstCase = false;
       lines.push(`  ${branchKw} __kf_b == ${sid} then`);
+      const fakeExprs = fakeGroup.map(
+        (fi) => `_kh[_B(${fi}, _kk) + 1] % 16`,
+      );
+      const fmt = "%X".repeat(KEYFUSE_CHUNK_NIBBLES);
       lines.push(
-        `    KEY = KEY .. string.format("%X", _kh[_B(${fakeI}, _kk) + 1] % 16)`,
+        `    KEY = KEY .. string.format("${fmt}", ${fakeExprs.join(", ")})`,
       );
       lines.push(`    __kf_b = ${fakeNext}`);
     } else {

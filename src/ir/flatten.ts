@@ -36,10 +36,12 @@ const MIN_BLOCKS_TOPLEVEL = 2;
 const MIN_BLOCKS_FUNC = 3;
 const SEED_STEP = 0x9E3779B1;
 
-// v0.11: 状态转移不透明谓词概率。50% 的转移升级为
-// `__b = (OPAQUE_TRUE and T) or EXIT_STATE`，其余保持 `__b = T`。
-// 攻击者不能假设所有转移都是直赋值，必须逐 case 化简谓词。
-const OPAQUE_TRANSITION_PROB = 0.5;
+// v0.8 性能修复：不透明谓词降频。原 v0.11 每个分支都按 50% 概率插入 → 每个 dispatch
+// case 多出 5 种形式 OPAQUE_TRUE 表达式 + 一次 and/or 短路求值。在 SANA HUB 500 行
+// 脚本（200+ dispatch case）上累积开销显著。改为每 stride 个分支才插一次，stride 由
+// seed 在 [5, 10] 内随机取，攻击者仍不能假设所有转移都是直赋值，但运行时开销可忽略。
+const OPAQUE_STRIDE_MIN = 5;
+const OPAQUE_STRIDE_MAX = 10;
 // v0.11: 假路径 case 数量范围。state ID 永不命中任何真实转移目标，
 // body 是垃圾 local + __b = -1（万一命中也安全退出）。
 const FAKE_CASE_MIN = 2;
@@ -155,6 +157,9 @@ function flattenBlock(
   }
 
   const dispatchCases: Node[] = [];
+  // v0.8：每个 flatten 作用域生成一个 state-assign 闭包，内含 stride 计数器。
+  // stride ∈ [5, 10]，由 rng 派生 → 不透明谓词每 stride 个分支才插一次。
+  const stateAssign = makeStateAssignFactory(rng, dispatchVar);
   for (const block of blocks) {
     if (block.terminator.type === "exit") {
       continue;
@@ -165,7 +170,7 @@ function flattenBlock(
       { ...block, stmts: transformedStmts },
       stateIdMap,
       dispatchVar,
-      rng,
+      stateAssign,
     );
 
     dispatchCases.push(
@@ -336,29 +341,29 @@ function makeLocalMulti(names: string[]): Node {
  * Build the body (Block) for one dispatch case: `if __b == S then <body> end`.
  * The body contains the block's statements followed by the state transition.
  *
- * v0.11: 状态转移以 OPAQUE_TRANSITION_PROB 概率升级为不透明谓词形式
- * `__b = (OPAQUE_TRUE and T) or EXIT_STATE`。OPAQUE_TRUE 用 dispatchVar 自身
- * 构造恒等式（5 种形式随机），不引入新变量。攻击者必须化简谓词才能确定转移目标。
+ * v0.8：状态转移通过 `stateAssign` 闭包生成。闭包内含 stride 计数器，每 stride
+ * 次调用才插入一次不透明谓词（OPAQUE_TRUE and T) or EXIT_STATE）。其余转移是
+ * 直赋值 `__b = T`。攻击者仍需逐 case 化简谓词，但运行时开销可忽略。
  */
 function buildIfBody(
   block: Block,
   stateIdMap: Map<number, number>,
   dispatchVar: string,
-  rng: () => number,
+  stateAssign: (targetState: number) => Node,
 ): Node {
   const stmts: Node[] = [...block.stmts];
 
   switch (block.terminator.type) {
     case "jump": {
       const targetState = stateIdMap.get(block.terminator.target) ?? EXIT_STATE;
-      stmts.push(makeStateAssign(dispatchVar, targetState, rng));
+      stmts.push(stateAssign(targetState));
       break;
     }
     case "branch": {
       const trueState = stateIdMap.get(block.terminator.trueTarget) ?? EXIT_STATE;
       const falseState = stateIdMap.get(block.terminator.falseTarget) ?? EXIT_STATE;
-      const trueAssign = makeStateAssign(dispatchVar, trueState, rng);
-      const falseAssign = makeStateAssign(dispatchVar, falseState, rng);
+      const trueAssign = stateAssign(trueState);
+      const falseAssign = stateAssign(falseState);
       stmts.push(
         makeIf(
           block.terminator.cond,
@@ -370,7 +375,7 @@ function buildIfBody(
     }
     case "loop": {
       const exitState = stateIdMap.get(block.terminator.exitTarget) ?? EXIT_STATE;
-      stmts.push(makeStateAssign(dispatchVar, exitState, rng));
+      stmts.push(stateAssign(exitState));
       break;
     }
     case "return": {
@@ -378,7 +383,7 @@ function buildIfBody(
       break;
     }
     case "exit": {
-      stmts.push(makeStateAssign(dispatchVar, EXIT_STATE, rng));
+      stmts.push(stateAssign(EXIT_STATE));
       break;
     }
   }
@@ -387,28 +392,39 @@ function buildIfBody(
 }
 
 /**
- * 生成状态转移赋值 `__b = <expr>`。
- * 以 OPAQUE_TRANSITION_PROB 概率升级为 `__b = (OPAQUE_TRUE and T) or EXIT_STATE`。
+ * v0.8 工厂：生成 state-assign 闭包，内含 stride 计数器。
+ *
+ * 闭包每次被调用时计数器 +1；当 `count % stride == 0` 时升级为不透明谓词形式
+ * `__b = (OPAQUE_TRUE and T) or EXIT_STATE`，其余保持直赋值 `__b = T`。
+ * stride ∈ [OPAQUE_STRIDE_MIN, OPAQUE_STRIDE_MAX]（5-10），由 rng 派生。
+ *
  * OPAQUE_TRUE 恒为真 → 表达式结果恒为 T。EXIT_STATE 作为 fallback 保证万一
- * 谓词误判也安全退出（不会无限循环）。
+ * 谓词误判也安全退出（不会无限循环）。OPAQUE_TRUE 用 dispatchVar 自身构造
+ * 恒等式（5 种形式随机），不引入新变量。
  */
-function makeStateAssign(
-  dispatchVar: string,
-  targetState: number,
+function makeStateAssignFactory(
   rng: () => number,
-): Node {
-  if (rng() >= OPAQUE_TRANSITION_PROB) {
-    return makeAssign(dispatchVar, makeNumber(String(targetState)));
-  }
-  const opaqueTrue = makeOpaqueTrue(makeIdent(dispatchVar), rng);
-  return makeAssign(
-    dispatchVar,
-    makeBinop(
-      "or",
-      makeBinop("and", opaqueTrue, makeNumber(String(targetState))),
-      makeNumber(String(EXIT_STATE)),
-    ),
-  );
+  dispatchVar: string,
+): (targetState: number) => Node {
+  const stride =
+    OPAQUE_STRIDE_MIN +
+    Math.floor(rng() * (OPAQUE_STRIDE_MAX - OPAQUE_STRIDE_MIN + 1));
+  let count = 0;
+  return (targetState: number): Node => {
+    count++;
+    if (count % stride !== 0) {
+      return makeAssign(dispatchVar, makeNumber(String(targetState)));
+    }
+    const opaqueTrue = makeOpaqueTrue(makeIdent(dispatchVar), rng);
+    return makeAssign(
+      dispatchVar,
+      makeBinop(
+        "or",
+        makeBinop("and", opaqueTrue, makeNumber(String(targetState))),
+        makeNumber(String(EXIT_STATE)),
+      ),
+    );
+  };
 }
 
 /**

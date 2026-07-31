@@ -237,32 +237,37 @@ export function xorByte(byte: number, key: number): number {
 // ---- Full packing pipeline ----
 
 /**
- * Pack a serialized function blob: LZW compress + stream encrypt + hex encode.
+ * Pack a serialized function blob: stream encrypt + hex encode.
+ *
+ * v0.8 性能修复：移除 LZW 压缩层（bi 层去重）。LZW 在运行时需要重建 256 项字典
+ * + 逐 code 字符串拼接，是 Roblox 脚本超时的主要瓶颈。仅保留 stream cipher
+ * (XOR 变换) 后整个解密链开销可忽略。
+ *
+ * `useLZW` 参数保留只是为了向后兼容（测试 / 旧调用方），实际被忽略——始终不压缩。
  *
  * @param serializedFunc The binary string from serializeFunction()
  * @param key The position-dependent cipher key
- * @param useLZW Whether to apply LZW compression (can be disabled for debugging)
+ * @param useLZW (deprecated v0.8) 不再压缩，参数被忽略
  * @returns Hex string ready for embedding in the Lua runtime
  */
-export function packBytecode(serializedFunc: string, key: number, useLZW: boolean = true): string {
+export function packBytecode(serializedFunc: string, key: number, useLZW: boolean = false): string {
+  void useLZW; // v0.8: LZW 移除，参数仅为向后兼容
   let data = serializedFunc;
 
-  // Step 1: LZW compress
-  if (useLZW) {
-    data = lzwCompress(data);
-  }
-
-  // Step 2: Stream encrypt (position-dependent)
+  // v0.8: LZW 压缩步骤移除（运行时解压是性能瓶颈）。
+  // Step 1: Stream encrypt (position-dependent XOR)
   data = streamEncrypt(data, key);
 
-  // Step 3: Hex encode for embedding
+  // Step 2: Hex encode for embedding
   return bytesToHex(data);
 }
 
 /**
- * Pack to the xor512 stage (LZW + stream + xor512), WITHOUT hex encoding.
+ * Pack to the xor512 stage (stream + xor512), WITHOUT hex encoding.
  * v0.10 rt_deps：pipeline 用此函数获取中间二进制串，从中算出 hexLen → rtToken，
  * 再用 packRtMixHex() 追加 rt_mix 层。xor512 / rt_mix 均保长，hexLen 不依赖 KEY。
+ *
+ * v0.8：移除 LZW 步骤（与 packBytecode 一致）。`useLZW` 参数仅为向后兼容，被忽略。
  *
  * @returns xor512 后的二进制串（尚未 hex 编码）
  */
@@ -270,10 +275,10 @@ export function packToXor512Stage(
   serializedFunc: string,
   key: number,
   keyBytes: number[],
-  useLZW: boolean = true,
+  useLZW: boolean = false,
 ): string {
+  void useLZW; // v0.8: LZW 移除
   let data = serializedFunc;
-  if (useLZW) data = lzwCompress(data);
   data = streamEncrypt(data, key);
   data = xor512Outer(data, keyBytes);
   return data;
@@ -281,7 +286,7 @@ export function packToXor512Stage(
 
 /**
  * 在 xor512 二进制串上追加 rt_mix 层 + hex 编码（v0.10 Feature 4）。
- * 运行时逆向：hex → hex_to_bytes → rt_mix_decrypt → xor_bytes_512 → stream_decrypt → lzw。
+ * v0.8：移除 LZW 步骤后，运行时逆向：hex → hex_to_bytes → rt_mix_decrypt → xor_bytes_512 → stream_decrypt。
  */
 export function packRtMixHex(xorData: string, rtToken: number): string {
   const rtData = rtMixEncrypt(xorData, rtToken);
@@ -290,22 +295,23 @@ export function packRtMixHex(xorData: string, rtToken: number): string {
 
 /**
  * Pack with an additional 512-bit XOR outer layer (v0.9 keyfuse).
- * Pipeline: serialize → LZW → streamEncrypt(8位) → xor512(512位) → hex.
- * 运行时逆向：hex → hex_to_bytes → xor_bytes_512 → stream_decrypt → lzw_decode。
+ * v0.8 性能修复：移除 LZW 步骤。
+ * Pipeline: serialize → streamEncrypt(8位) → xor512(512位) → hex.
+ * 运行时逆向：hex → hex_to_bytes → xor_bytes_512 → stream_decrypt。
  *
  * @param serializedFunc The binary string from serializeFunction()
  * @param key           8 位 stream cipher key
  * @param keyBytes      512 位（64 字节）XOR 密钥
- * @param useLZW        是否 LZW 压缩
+ * @param useLZW        (deprecated v0.8) 不再压缩，参数被忽略
  */
 export function packBytecodeKeyfused(
   serializedFunc: string,
   key: number,
   keyBytes: number[],
-  useLZW: boolean = true,
+  useLZW: boolean = false,
 ): string {
+  void useLZW; // v0.8: LZW 移除
   let data = serializedFunc;
-  if (useLZW) data = lzwCompress(data);
   data = streamEncrypt(data, key);
   // v0.9: 512 位 XOR 外层（在 hex 编码前作用于二进制串）。
   data = xor512Outer(data, keyBytes);
@@ -315,39 +321,41 @@ export function packBytecodeKeyfused(
 /**
  * Unpack a hex string back to the original serialized function blob.
  *
+ * v0.8：`useLZW` 参数仅为向后兼容，被忽略（不再 LZW 解压）。
+ *
  * @param hex The hex string from packBytecode()
  * @param key The position-dependent cipher key
- * @param useLZW Whether LZW compression was applied
+ * @param useLZW (deprecated v0.8) 不再解压，参数被忽略
  * @returns The binary string (serialized function)
  */
-export function unpackBytecode(hex: string, key: number, useLZW: boolean = true): string {
+export function unpackBytecode(hex: string, key: number, useLZW: boolean = false): string {
+  void useLZW; // v0.8: LZW 移除
   // Step 1: Hex decode
   let data = hexToBytes(hex);
 
   // Step 2: Stream decrypt
   data = streamDecrypt(data, key);
 
-  // Step 3: LZW decompress
-  if (useLZW) {
-    data = lzwDecompress(data);
-  }
+  // v0.8: LZW decompress 步骤移除。
 
   return data;
 }
 
 /**
  * Unpack with the 512-bit XOR outer layer (inverse of packBytecodeKeyfused).
+ *
+ * v0.8：`useLZW` 参数仅为向后兼容，被忽略。
  */
 export function unpackBytecodeKeyfused(
   hex: string,
   key: number,
   keyBytes: number[],
-  useLZW: boolean = true,
+  useLZW: boolean = false,
 ): string {
+  void useLZW; // v0.8: LZW 移除
   let data = hexToBytes(hex);
   data = xor512Outer(data, keyBytes); // XOR 对称，同函数解密
   data = streamDecrypt(data, key);
-  if (useLZW) data = lzwDecompress(data);
   return data;
 }
 
